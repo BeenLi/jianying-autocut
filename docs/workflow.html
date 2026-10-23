@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>jianying-autocut 工作流 · Swimlane</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@500;600&family=Noto+Serif+SC:wght@500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif SC', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1320px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    .diagram-container { overflow-x: auto; }
+    svg { width: 100%; min-width: 1280px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Swimlane · jianying-autocut</p>
+    <h1>从素材文件夹到剪映草稿</h1>
+
+    <div class="diagram-container">
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="workflow-title workflow-desc">
+      <title id="workflow-title">jianying-autocut 工作流</title>
+      <desc id="workflow-desc">泳道图：用户提供素材与需求，本地脚本盘点打分，小米 MiMo 理解素材，Claude 写故事脚本，本地脚本排分镜，用户确认后生成剪映草稿，最后在剪映里精修导出。</desc>
+      <defs>
+        <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+        </pattern>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+      <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/>
+
+      <!-- Lane dividers -->
+      <line x1="40" y1="40" x2="1256" y2="40" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <line x1="40" y1="184" x2="1256" y2="184" stroke="rgba(45,49,66,0.10)" stroke-width="1"/>
+      <line x1="40" y1="328" x2="1256" y2="328" stroke="rgba(45,49,66,0.10)" stroke-width="1"/>
+      <line x1="40" y1="472" x2="1256" y2="472" stroke="rgba(45,49,66,0.10)" stroke-width="1"/>
+      <line x1="40" y1="616" x2="1256" y2="616" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <line x1="136" y1="40" x2="136" y2="616" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+
+      <!-- Lane labels (Han: 12px sans 500, no tracking) -->
+      <text x="56" y="116" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif">你</text>
+      <text x="56" y="260" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif">Claude</text>
+      <text x="56" y="404" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif">本地脚本</text>
+      <text x="56" y="548" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif">小米 MiMo</text>
+
+      <!-- Arrows (drawn first) -->
+      <!-- a. 素材 → 盘点 -->
+      <path d="M 288,112 H 372 Q 380,112 380,120 V 372" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- b. 盘点 → 看懂素材（代理长片） -->
+      <path d="M 380,428 V 536 Q 380,544 388,544 H 472" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- c. 看懂素材 → 写故事（brief） -->
+      <path d="M 608,544 H 668 Q 676,544 676,536 V 284" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- d. 盘点 → 写故事（无 MiMo 时：联系表，降级） -->
+      <path d="M 448,400 H 584 Q 592,400 592,392 V 264 Q 592,256 600,256 H 632" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <!-- e. 写故事 → 分镜规划 -->
+      <path d="M 724,284 V 392 Q 724,400 732,400 H 792" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- f. 分镜规划 → 确认分镜（dry-run） -->
+      <path d="M 928,400 H 988 Q 996,400 996,392 V 140" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- g. 确认分镜 → 生成草稿 -->
+      <path d="M 1044,140 V 392 Q 1044,400 1052,400 H 1112" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- h. 生成草稿 → 剪映草稿 -->
+      <line x1="1180" y1="372" x2="1180" y2="140" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Arrow labels (opaque masks, 8px gap from strokes) -->
+      <rect x="400" y="524" width="60" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="430" y="533" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">720P REEL</text>
+
+      <rect x="620" y="524" width="36" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="638" y="533" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">BRIEF</text>
+
+      <rect x="496" y="304" width="88" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="540" y="313" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">NO MIMO KEY</text>
+
+      <rect x="732" y="304" width="68" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="766" y="313" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">STORY PLAN</text>
+
+      <rect x="932" y="248" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="960" y="257" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">DRY-RUN</text>
+
+      <rect x="1052" y="248" width="56" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="1080" y="257" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">APPROVE</text>
+
+      <rect x="1188" y="248" width="64" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="1220" y="257" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">DRAFT 164</text>
+
+      <!-- Steps -->
+      <!-- 你：素材 + 需求 -->
+      <rect x="152" y="84" width="136" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="152" y="84" width="136" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="220" y="108" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif" text-anchor="middle">素材 + 需求</text>
+      <text x="220" y="124" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">clips · target · bgm</text>
+
+      <!-- 本地脚本：盘点 · 抽帧打分 -->
+      <rect x="312" y="372" width="136" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="312" y="372" width="136" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="380" y="396" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif" text-anchor="middle">盘点 · 抽帧打分</text>
+      <text x="380" y="412" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">probe.py · frames.py</text>
+
+      <!-- MiMo：看懂素材 -->
+      <rect x="472" y="516" width="136" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="472" y="516" width="136" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="540" y="540" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif" text-anchor="middle">看懂素材</text>
+      <text x="540" y="556" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">VLM · ASR · orientation</text>
+
+      <!-- Claude：写故事（焦点） -->
+      <rect x="632" y="228" width="136" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="632" y="228" width="136" height="56" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+      <text x="700" y="252" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif" text-anchor="middle">写故事</text>
+      <text x="700" y="268" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">story_plan.json</text>
+
+      <!-- 本地脚本：分镜规划 -->
+      <rect x="792" y="372" width="136" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="792" y="372" width="136" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="860" y="396" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif" text-anchor="middle">分镜规划</text>
+      <text x="860" y="412" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">plan.py · rhythm · µs</text>
+
+      <!-- 你：确认分镜 -->
+      <rect x="952" y="84" width="136" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="952" y="84" width="136" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="1020" y="108" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif" text-anchor="middle">确认分镜</text>
+      <text x="1020" y="124" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">plan.py --dry-run</text>
+
+      <!-- 本地脚本：生成草稿 -->
+      <rect x="1112" y="372" width="136" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="1112" y="372" width="136" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="1180" y="396" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif" text-anchor="middle">生成草稿</text>
+      <text x="1180" y="412" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">build.py · titles · bgm</text>
+
+      <!-- 你：剪映草稿（焦点） -->
+      <rect x="1112" y="84" width="136" height="56" rx="6" fill="#f5f5f5"/>
+      <rect x="1112" y="84" width="136" height="56" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+      <text x="1180" y="108" fill="#2d3142" font-size="13" font-weight="600" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif" text-anchor="middle">剪映草稿</text>
+      <text x="1180" y="124" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">open · edit · export</text>
+
+      <!-- Legend -->
+      <line x1="40" y1="640" x2="1256" y2="640" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="40" y="660" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+      <rect x="40" y="676" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="62" y="686" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif">步骤</text>
+
+      <rect x="140" y="676" width="14" height="10" rx="2" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+      <text x="162" y="686" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif">核心环节 / 最终产物</text>
+
+      <line x1="352" y1="681" x2="380" y2="681" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="388" y="686" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif">数据 / 交接</text>
+
+      <line x1="512" y1="681" x2="540" y2="681" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <text x="548" y="686" fill="#4f5d75" font-size="12" font-weight="500" font-family="'Geist', 'Noto Sans SC', 'PingFang SC', sans-serif">没有 MiMo 时的降级路径：Claude 直接看联系表</text>
+    </svg>
+    </div>
+  </div>
+</body>
+</html>
