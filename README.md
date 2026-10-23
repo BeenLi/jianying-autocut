@@ -22,16 +22,16 @@
   <img alt="jianying-autocut 工作流：素材 → 盘点打分 → MiMo 看懂素材 → Claude 写故事 → 分镜规划 → 确认 → 生成剪映草稿" src="docs/workflow.png" width="100%">
 </p>
 
-| 步 | 谁来做 | 做什么 | 产出（在 `<素材目录>/_autocut/`） |
-|---|---|---|---|
-| 0 | 你 | 告诉 Claude 素材目录、想剪多长、一句话背景、要不要 BGM | — |
-| 1 盘点 | 本地脚本 `probe.py` | 扫描素材：时长、分辨率、帧率、拍摄时间、音轨、人声频段的静音段；编号随文件稳定不变 | `inventory.csv` `silences.json` |
-| 2 抽帧打分 | 本地脚本 `frames.py` | 每 8 秒抽一帧关键帧，判糊（和本段素材自己比）、判曝光，拼联系表 | `frames.csv` `thumbs/` `contact/` |
-| 3 看懂素材 | 小米 MiMo（`understand.py` 调用收录的 video-understanding） | 把所有素材拼成一条 720p 代理长片，只跑一次：场景切分、逐场景画面描述（VLM）、语音转写（ASR）；再拆回每段素材。另外逐帧判断画面方向 | `understanding/` `clip_understanding.json` `orientation.json` |
-| 4 写故事 | Claude | 读理解简报，按 video-script 的导演方法写故事：钩子 / 铺垫 / 转折 / 高潮 / 收尾，剔除无关素材，可选平行蒙太奇 | `recap_story_plan.json` → `story_plan.json` |
-| 5 分镜规划 | 本地脚本 `plan.py` | 按章节分配时长，按「长 12–18s / 短 3–6s / 中 6–9s」节奏挑镜头，避开坏帧，入点吸附静音处，总长精确到微秒；先 dry-run 给你看 | `shots.csv` |
-| 6 生成草稿 | 本地脚本 `build.py` | 写入剪映草稿：主视频轨、章节标题文字轨、BGM 音频轨；写完读回自检 | 剪映草稿目录 |
-| 7 精修导出 | 你 | 在剪映里打开草稿，调色、转场、字幕、导出成片 | 成片 |
+| 步骤 | 做什么 | 产出（`_autocut/` 下） |
+|:--|:--|:--|
+| **0&nbsp;提需求**<br><sub>你</sub> | 素材目录、目标时长、一句话背景、要不要 BGM | — |
+| **1&nbsp;盘点**<br><sub>`probe.py`</sub> | 时长、分辨率、拍摄时间、静音段；编号随文件稳定 | `inventory.csv` |
+| **2&nbsp;抽帧打分**<br><sub>`frames.py`</sub> | 每 8 秒抽关键帧，判糊、判曝光，拼联系表 | `frames.csv` `contact/` |
+| **3&nbsp;看懂素材**<br><sub>MiMo · `understand.py`</sub> | 拼成 720p 代理长片只跑一次：场景描述 + 语音转写，再拆回每段；逐帧判方向 | `clip_understanding.json` |
+| **4&nbsp;写故事**<br><sub>Claude</sub> | 钩子 / 铺垫 / 转折 / 高潮 / 收尾；剔除无关素材；可选平行蒙太奇 | `story_plan.json` |
+| **5&nbsp;分镜**<br><sub>`plan.py`</sub> | 分配时长，按长短节奏挑镜头，避坏帧、吸附静音，精确到微秒；先 dry-run | `shots.csv` |
+| **6&nbsp;生成草稿**<br><sub>`build.py`</sub> | 主视频轨 + 章节标题 + BGM，写完读回自检 | 剪映草稿 |
+| **7&nbsp;精修导出**<br><sub>你</sub> | 剪映里调色、转场、字幕、导出成片 | 成片 |
 
 没有 MiMo key（或余额不足）时会**提醒你充值**；也可以加 `--no-understanding` 走降级路径：Claude 直接看 `contact/` 联系表写故事。
 
