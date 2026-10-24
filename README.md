@@ -14,10 +14,15 @@
   <a href="./LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/License-MIT-1F6FEB?style=flat-square"></a>
 </p>
 
-<p align="center">
-  <img alt="宣传片：62 段原始素材 → 盘点打分 → MiMo 看懂素材 → 写故事 → 分镜 → 剪映草稿" src="docs/promo/promo.gif" width="100%">
-  <br><sub>⬇ <a href="https://github.com/BeenLi/jianying-autocut/raw/main/docs/promo/promo.mp4">下载 1080p 带配乐版（mp4 · 60 秒 · 6 MB）</a>。演示素材来自一次真实的庐山徒步，人脸已打码。</sub>
-</p>
+https://github.com/user-attachments/assets/49aefca2-ebe3-462f-954b-6b11cf4b07e2
+
+<p align="center"><sub>60 秒演示：62 段原始素材 → 盘点打分 → MiMo 看懂素材 → 写故事 → 分镜 → 剪映草稿。演示素材来自一次真实的庐山徒步，人脸已打码。
+⬇ <a href="https://github.com/BeenLi/jianying-autocut/raw/main/docs/promo/promo.mp4">下载 mp4</a></sub></p>
+
+<details>
+<summary>看不到播放器？点这里看 GIF 版</summary>
+<img alt="宣传片 GIF 版" src="docs/promo/promo.gif" width="100%">
+</details>
 
 ---
 
