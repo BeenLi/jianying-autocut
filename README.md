@@ -14,6 +14,11 @@
   <a href="./LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/License-MIT-1F6FEB?style=flat-square"></a>
 </p>
 
+<p align="center">
+  <a href="docs/promo/promo.mp4"><img alt="宣传片：62 段原始素材 → 盘点打分 → MiMo 看懂素材 → 写故事 → 分镜 → 剪映草稿" src="docs/promo/promo.gif" width="100%"></a>
+  <br><sub>▶ 点击看 1080p 带配乐版（60 秒）。演示素材来自一次真实的庐山徒步，人脸已打码。</sub>
+</p>
+
 ---
 
 ## 工作流

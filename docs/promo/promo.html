@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>jianying-autocut promo</title>
+<script src="build/data.js"></script>
+<style>
+  :root {
+    --paper: #f5f5f5; --paper2: #ececec; --ink: #2d3142; --muted: #4f5d75; --soft: #8a93a6;
+    --accent: #bf4520; --link: #2e5aa8; --ok: #2f7d55;
+    --sans: 'PingFang SC', 'Helvetica Neue', 'Noto Sans SC', sans-serif;
+    --mono: 'SF Mono', Menlo, ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--paper); font-family: var(--sans); color: var(--ink); }
+  .scene { position: absolute; inset: 0; opacity: 0; }
+  .dots { position: absolute; inset: 0; background-image: radial-gradient(rgba(45,49,66,0.10) 1.2px, transparent 1.2px); background-size: 26px 26px; }
+  .step { position: absolute; left: 120px; top: 96px; }
+  .step .no { font-family: var(--mono); font-size: 22px; letter-spacing: 0.2em; color: var(--accent); }
+  .step h2 { font-size: 56px; font-weight: 600; letter-spacing: -0.01em; margin-top: 10px; }
+  .step p { font-size: 26px; color: var(--muted); margin-top: 14px; }
+  .chip { display: inline-block; font-family: var(--mono); font-size: 16px; padding: 4px 10px; border: 1px solid rgba(45,49,66,0.25); border-radius: 4px; color: var(--muted); }
+  .foot { position: absolute; left: 120px; bottom: 64px; font-size: 20px; color: var(--soft); }
+
+  /* S1 title */
+  #s1 { background: #111; }
+  #s1 .bg { position: absolute; inset: -40px; background-size: cover; background-position: center; }
+  #s1 .shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(10,12,18,0.82) 0%, rgba(10,12,18,0.45) 60%, rgba(10,12,18,0.15) 100%); }
+  #s1 .t { position: absolute; left: 140px; top: 330px; color: #fff; }
+  #s1 .eyebrow { font-family: var(--mono); font-size: 24px; letter-spacing: 0.3em; color: #f08a59; }
+  #s1 h1 { font-size: 92px; font-weight: 600; margin-top: 22px; letter-spacing: -0.01em; }
+  #s1 .sub { font-size: 32px; margin-top: 28px; color: rgba(255,255,255,0.82); }
+
+  /* S2 wall */
+  #wall { position: absolute; left: 120px; top: 300px; width: 1680px; display: grid; grid-template-columns: repeat(11, 144px); gap: 10px; }
+  #wall .tile { width: 144px; height: 81px; background-size: cover; border-radius: 4px; border: 1px solid rgba(45,49,66,0.15); }
+  #wall .tile.clear { border: 2px solid var(--accent); }
+
+  /* S3 table + bad frames */
+  #inv { position: absolute; left: 120px; top: 330px; width: 860px; height: 560px; overflow: hidden; background: #fff; border: 1px solid rgba(45,49,66,0.18); border-radius: 6px; }
+  #inv .rows { position: absolute; left: 0; right: 0; top: 0; }
+  #inv .row { display: grid; grid-template-columns: 90px 400px 130px 160px; height: 44px; align-items: center; padding: 0 22px; font-family: var(--mono); font-size: 18px; border-bottom: 1px solid rgba(45,49,66,0.07); }
+  #inv .head { position: absolute; top: 0; left: 0; right: 0; z-index: 2; background: var(--paper2); color: var(--muted); }
+  #bad { position: absolute; left: 1040px; top: 330px; width: 760px; }
+  #bad .f { position: relative; display: inline-block; width: 360px; height: 202px; margin: 0 16px 20px 0; background-size: cover; border-radius: 4px; }
+  #bad .f .box { position: absolute; inset: 0; border: 4px solid #d23b2a; border-radius: 4px; }
+  #bad .f .lab { position: absolute; left: 10px; top: 10px; background: #d23b2a; color: #fff; font-size: 20px; padding: 3px 10px; border-radius: 3px; }
+
+  /* S4 captions */
+  .cards { position: absolute; left: 120px; top: 330px; display: flex; gap: 32px; }
+  .card { width: 536px; background: #fff; border: 1px solid rgba(45,49,66,0.18); border-radius: 6px; overflow: hidden; }
+  .card .img { height: 300px; background-size: cover; background-position: center; }
+  .card .cap { padding: 18px 22px 22px; font-size: 22px; line-height: 1.55; height: 150px; }
+  .card .cap .id { font-family: var(--mono); font-size: 16px; color: var(--accent); display: block; margin-bottom: 6px; }
+  .alert { position: absolute; left: 120px; top: 868px; font-size: 26px; padding: 14px 22px; border-left: 4px solid var(--accent); background: rgba(191,69,32,0.07); }
+
+  /* S5 story */
+  .chapters { position: absolute; left: 120px; top: 360px; display: flex; gap: 22px; }
+  .ch { width: 318px; height: 300px; background: #fff; border: 1px solid rgba(45,49,66,0.2); border-radius: 6px; padding: 26px; position: relative; }
+  .ch .fn { font-family: var(--mono); font-size: 16px; letter-spacing: 0.12em; }
+  .ch .tt { font-size: 34px; font-weight: 600; margin-top: 18px; }
+  .ch .du { font-family: var(--mono); font-size: 18px; color: var(--muted); margin-top: 12px; }
+  .ch .lanes { position: absolute; left: 26px; right: 26px; bottom: 26px; font-size: 18px; }
+  .ch .lane { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .ch .lane .bar { flex: 1; height: 12px; display: flex; gap: 3px; }
+  .ch .lane .bar i { flex: 1; border-radius: 2px; }
+  .excluded { position: absolute; left: 120px; top: 720px; font-size: 26px; color: var(--soft); }
+  .excluded s { text-decoration-thickness: 2px; }
+
+  /* S6 timeline */
+  #tl { position: absolute; left: 120px; top: 440px; width: 1680px; height: 120px; background: #fff; border: 1px solid rgba(45,49,66,0.2); border-radius: 6px; overflow: hidden; }
+  #tl .seg { position: absolute; top: 14px; height: 92px; border-radius: 3px; }
+  #tlch { position: absolute; left: 120px; top: 584px; width: 1680px; height: 40px; }
+  #tlch div { position: absolute; font-size: 20px; color: var(--muted); white-space: nowrap; }
+  #clock { position: absolute; right: 120px; top: 300px; font-family: var(--mono); font-size: 84px; font-weight: 500; }
+  .legend { position: absolute; left: 120px; top: 700px; display: flex; gap: 40px; font-size: 22px; color: var(--muted); }
+  .legend span::before { content: ''; display: inline-block; width: 28px; height: 14px; border-radius: 2px; margin-right: 10px; vertical-align: -1px; background: var(--c); }
+
+  /* S7 terminal */
+  .term { position: absolute; left: 120px; top: 330px; width: 1680px; height: 560px; background: #1d2030; border-radius: 10px; padding: 64px 48px 40px; font-family: var(--mono); font-size: 25px; line-height: 1.8; color: #d7dbe6; }
+  .term::before { content: ''; position: absolute; left: 22px; top: 22px; width: 14px; height: 14px; border-radius: 50%; background: #ff5f56; box-shadow: 24px 0 #ffbd2e, 48px 0 #27c93f; }
+  .term .p { color: #9fb3ff; } .term .ok { color: #7ee2a8; }
+
+  /* S8 jianying */
+  #s8 { background: #141414; }
+  .jy { position: absolute; left: 80px; top: 120px; width: 1760px; }
+  .jy .bar { color: #cfcfcf; font-size: 24px; display: flex; justify-content: space-between; padding: 0 6px 18px; }
+  .jy .bar b { color: #fff; font-weight: 600; }
+  .jy .ruler { position: relative; height: 32px; border-bottom: 1px solid #333; margin-left: 160px; }
+  .jy .ruler span { position: absolute; top: 4px; font-family: var(--mono); font-size: 16px; color: #888; }
+  .jy .track { position: relative; height: 96px; margin-top: 14px; display: flex; }
+  .jy .track .name { width: 160px; color: #9a9a9a; font-size: 20px; padding-top: 34px; }
+  .jy .track .lane { position: relative; flex: 1; background: #1f1f1f; border-radius: 4px; }
+  .jy .seg { position: absolute; top: 8px; bottom: 8px; border-radius: 3px; overflow: hidden; }
+  .jy .seg.v { background: #2b5c8a; border: 1px solid #3f7cb6; }
+  .jy .seg.t { background: #8a4b2b; border: 1px solid #c06a3c; color: #fff; font-size: 16px; padding: 6px 8px; white-space: nowrap; }
+  .jy .seg.a { background: #2f6b4d; border: 1px solid #47a074; }
+  .jy .playhead { position: absolute; top: 30px; width: 2px; height: 360px; background: #fff; }
+  .end { position: absolute; left: 0; right: 0; top: 700px; text-align: center; color: #fff; }
+  .end .url { font-family: var(--mono); font-size: 44px; color: #f08a59; }
+  .end .s { font-size: 30px; margin-top: 16px; color: #cfcfcf; }
+</style>
+</head>
+<body>
+<div id="s1" class="scene"><div class="bg"></div><div class="shade"></div>
+  <div class="t"><div class="eyebrow">JIANYING-AUTOCUT</div><h1>一个素材文件夹 → 一份剪映草稿</h1>
+  <div class="sub">AI 看懂素材 · 写故事 · 按节奏挑镜头 · 生成可直接打开的剪映草稿</div></div></div>
+
+<div id="s2" class="scene"><div class="dots"></div>
+  <div class="step"><div class="no">01 · 原始素材</div><h2 id="s2t"></h2><p>一次真实的庐山徒步：手机 + 相机，4K HEVC，时长从 0.8 秒到 9 分钟</p></div>
+  <div id="wall"></div><div class="foot">人脸已打码；清晰的格子是人工核对过的风景镜头</div></div>
+
+<div id="s3" class="scene"><div class="dots"></div>
+  <div class="step"><div class="no">02 · 盘点 + 抽帧打分</div><h2>先把每段素材「量」一遍</h2><p>时长、分辨率、拍摄时间、静音段；每 8 秒抽一帧判糊、判曝光</p></div>
+  <div id="inv"><div class="row head"><span>ID</span><span>文件</span><span>时长</span><span>分辨率</span></div><div class="rows"></div></div>
+  <div id="bad"></div></div>
+
+<div id="s4" class="scene"><div class="dots"></div>
+  <div class="step"><div class="no">03 · 小米 MiMo 看懂素材</div><h2>拼成一条 720p 代理长片，只理解一次</h2><p>场景切分 · 逐场景画面描述（VLM）· 语音转写（ASR）· 逐帧判断画面方向</p></div>
+  <div class="cards" id="cards"></div><div class="alert" id="alert"></div></div>
+
+<div id="s5" class="scene"><div class="dots"></div>
+  <div class="step"><div class="no">04 · Claude 写故事</div><h2>按导演方法排出故事线</h2><p>钩子冷开场 → 铺垫 → 推进 → 高潮 → 收尾；「两代人上山」用平行蒙太奇交替剪</p></div>
+  <div class="chapters" id="chapters"></div>
+  <div class="excluded" id="excluded">剔除无关素材：<s>c001–c010 另一趟出行</s> &nbsp; <s>c041–c062 其他日期</s> &nbsp; <s>c024 挂着晃拍</s></div></div>
+
+<div id="s6" class="scene"><div class="dots"></div>
+  <div class="step"><div class="no">05 · 分镜规划</div><h2>按节奏挑镜头，总长精确到微秒</h2><p>长 12–18s 压场 · 短 3–6s 铺节奏 · 避开坏帧 · 入点吸附静音处</p></div>
+  <div id="clock">0:00.000</div><div id="tl"></div><div id="tlch"></div>
+  <div class="legend" id="legend"></div></div>
+
+<div id="s7" class="scene"><div class="dots"></div>
+  <div class="step"><div class="no">06 · 生成剪映草稿</div><h2>写入草稿，读回自检</h2><p>版本号读自本机剪映 · 素材只引用不复制 · 主视频轨 + 章节标题 + BGM</p></div>
+  <div class="term" id="term"></div></div>
+
+<div id="s8" class="scene"><div class="jy" id="jy"></div>
+  <div class="end" id="end"><div class="url">github.com/BeenLi/jianying-autocut</div><div class="s">打开剪映，接着精修、导出</div></div></div>
+
+<script>
+const D = window.DATA;
+const $ = (s) => document.querySelector(s);
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ease = (x) => { x = clamp(x); return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const out = (x) => 1 - Math.pow(1 - clamp(x), 3);
+const A = (p) => `build/assets/${p}`;
+const fmt = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
+const CH = { hook: '#bf4520', setup: '#4f5d75', escalation: '#2e5aa8', payoff: '#2f7d55' };
+const FN = { hook: '钩子', setup: '铺垫', escalation: '推进', turn: '转折', payoff: '高潮 / 收尾' };
+const chColor = (no, b) => { const c = D.chapters.find(x => x.no === no); const k = c.function;
+  if (c.intercut) return b ? '#8fb2e8' : '#2e5aa8'; if (k === 'payoff' && no === D.chapters[D.chapters.length - 1].no) return '#8a6d3b'; return CH[k] || '#4f5d75'; };
+
+// ---------- build DOM ----------
+$('#s1 .bg').style.backgroundImage = `url(${A(D.heroes[0])})`;
+$('#s2t').textContent = `${D.folder.clips} 段素材 · ${D.folder.minutes} 分钟 · ${D.folder.gb} GB`;
+const wall = $('#wall');
+D.wall.forEach(w => { const d = document.createElement('div'); d.className = 'tile' + (w.clear ? ' clear' : ''); d.style.backgroundImage = `url(${A(w.img)})`; wall.appendChild(d); });
+const rows = $('#inv .rows');
+[...D.inventory, ...D.inventory].forEach(r => { const d = document.createElement('div'); d.className = 'row';
+  d.innerHTML = `<span>${r.id}</span><span>${r.name}</span><span>${r.dur.toFixed(1)}s</span><span>${r.res}</span>`; rows.appendChild(d); });
+rows.style.top = '44px';
+const bad = $('#bad');
+bad.innerHTML = `<div style="font-size:26px;margin-bottom:22px">抽检 <b>${D.frames.n}</b> 帧，<b style="color:#d23b2a">${D.frames.bad}</b> 帧糊 / 黑 / 曝光异常，挑镜头时自动避开</div>`;
+D.bad.forEach(b => { const d = document.createElement('div'); d.className = 'f'; d.style.backgroundImage = `url(${A(b.img)})`;
+  d.innerHTML = `<div class="box"></div><div class="lab">${b.label} · ${b.id}</div>`; bad.appendChild(d); });
+const cards = $('#cards');
+D.captions.forEach(c => { const d = document.createElement('div'); d.className = 'card';
+  d.innerHTML = `<div class="img" style="background-image:url(${A(c.img)})"></div><div class="cap"><span class="id">${c.id} · MiMo 描述</span><span class="tx"></span></div>`; cards.appendChild(d); });
+$('#alert').innerHTML = `画面方向：c024 抽检 ${D.orient.c024_total} 帧里 <b>${D.orient.c024_bad}</b> 帧歪倒（相机挂着晃拍）→ <b>整段弃用</b>`;
+const chs = $('#chapters');
+D.chapters.forEach(c => { const d = document.createElement('div'); d.className = 'ch'; const col = chColor(c.no, false);
+  let lanes = '';
+  if (c.intercut) { const ss = D.shots.filter(s => s.chapter === c.no);
+    const bar = (b) => ss.map(s => `<i style="background:${s.b === b ? chColor(c.no, b) : 'transparent'}"></i>`).join('');
+    lanes = `<div class="lanes"><div class="lane"><span>我们俩</span><div class="bar">${bar(false)}</div></div><div class="lane"><span>爸&nbsp;&nbsp;妈</span><div class="bar">${bar(true)}</div></div></div>`; }
+  d.innerHTML = `<div class="fn" style="color:${col}">${FN[c.function] || c.function}${c.intercut ? ' · 平行蒙太奇' : ''}</div><div class="tt">${c.title}</div><div class="du">${fmt(c.dur).slice(0, -2)}</div>${lanes}`;
+  d.style.borderTop = `5px solid ${col}`; chs.appendChild(d); });
+const tl = $('#tl'), W1 = 1680, T = D.total;
+D.shots.forEach(s => { const d = document.createElement('div'); d.className = 'seg';
+  d.style.left = `${s.start / T * W1 + 1}px`; d.style.width = `${Math.max(2, s.dur / T * W1 - 2)}px`; d.style.background = chColor(s.chapter, s.b); tl.appendChild(d); });
+D.chapters.forEach(c => { const first = D.shots.find(s => s.chapter === c.no); const d = document.createElement('div');
+  d.style.left = `${first.start / T * W1}px`; d.textContent = c.title; $('#tlch').appendChild(d); });
+$('#legend').innerHTML = D.chapters.map(c => `<span style="--c:${chColor(c.no, false)}">${c.title}</span>`).join('') + `<span style="--c:#8fb2e8">爸妈线（交替）</span>`;
+const termLines = [
+  ['p', `$ uv run --script build.py --work _autocut --name ${D.draft.name} --titles --bgm song.mp3`],
+  ['', `本机剪映 11.6，草稿版本 ${D.draft.version}`],
+  ['', `${D.draft.tracks[0].n} 个镜头 · ${D.chapters.length} 章 + 章节标题 + BGM（${D.draft.tracks[2].n} 段），总长 ${fmt(T)}，画布 ${D.draft.canvas}`],
+  ['ok', '✓ 零缝隙零重叠   ✓ 时长精确   ✓ 无悬空引用'],
+  ['ok', '✓ 素材零复制     ✓ 版本号对齐 ✓ BGM 铺满不越界'],
+  ['', '现在打开剪映，首页就能看到这个草稿。'],
+];
+const jy = $('#jy');
+const ticks = [0, 60, 120, 180, 240, 300].map(s => `<span style="left:${s / T * 100}%">${fmt(s).slice(0, 4)}</span>`).join('');
+const trackHtml = (name, cls, segs, label) => `<div class="track"><div class="name">${name}</div><div class="lane">${segs.map((g, i) =>
+  `<div class="seg ${cls}" style="left:${g[0] / T * 100}%;width:calc(${g[1] / T * 100}% - 2px)">${label ? label(i) : ''}</div>`).join('')}</div></div>`;
+jy.innerHTML = `<div class="bar"><b>${D.draft.name}</b><span>剪映专业版 · 草稿 ${D.draft.version} · ${D.draft.canvas} · ${fmt(T).slice(0, 4)}</span></div>
+  <div class="ruler">${ticks}</div>
+  ${trackHtml('章节标题', 't', D.draft.tracks[1].segs, i => D.chapters[i] ? D.chapters[i].title : '')}
+  ${trackHtml(`视频 ×${D.draft.tracks[0].n}`, 'v', D.draft.tracks[0].segs)}
+  ${trackHtml('BGM', 'a', D.draft.tracks[2].segs)}
+  <div class="playhead" id="ph"></div>`;
+
+// ---------- timeline ----------
+const S = [
+  ['#s1', 0, 5], ['#s2', 5, 12], ['#s3', 12, 19], ['#s4', 19, 28],
+  ['#s5', 28, 37], ['#s6', 37, 46], ['#s7', 46, 53], ['#s8', 53, 60],
+];
+const FADE = 0.45;
+function stagger(nodes, p, span, each, fx) { const n = nodes.length; nodes.forEach((el, i) => fx(el, out((p - i / Math.max(1, n - 1) * span) / each))); }
+
+window.render = function (t) {
+  S.forEach(([sel, a, b]) => { const el = $(sel);
+    const o = Math.min(clamp((t - a) / FADE), clamp((b - t) / FADE + (sel === '#s8' ? 1 : 0)), sel === '#s1' ? 1 : 1);
+    el.style.opacity = (t >= a - 0.001 && t < b + FADE) ? (sel === '#s1' ? Math.min(1, clamp((b - t) / FADE)) : o) : 0; });
+  // S1
+  { const p = clamp(t / 5); $('#s1 .bg').style.transform = `scale(${1.06 + 0.10 * p}) translateX(${-20 * p}px)`;
+    [...$('#s1 .t').children].forEach((c, i) => { const q = out((t - 0.3 - i * 0.35) / 0.8); c.style.opacity = q; c.style.transform = `translateY(${(1 - q) * 24}px)`; }); }
+  // S2
+  { const p = t - 5; stagger([...wall.children], p, 3.2, 0.35, (el, q) => { el.style.opacity = q; el.style.transform = `scale(${0.6 + 0.4 * q})`; }); }
+  // S3
+  { const p = t - 12; rows.style.transform = `translateY(${-clamp(p / 7) * 44 * 22}px)`;
+    stagger([...bad.querySelectorAll('.f')], p - 1.2, 1.4, 0.5, (el, q) => { el.style.opacity = q; el.style.transform = `translateY(${(1 - q) * 20}px)`; });
+    bad.firstChild.style.opacity = out((p - 0.6) / 0.6); }
+  // S4
+  { const p = t - 19; [...cards.children].forEach((c, i) => { const q = out((p - 0.4 - i * 0.5) / 0.6); c.style.opacity = q; c.style.transform = `translateY(${(1 - q) * 24}px)`;
+      const tx = D.captions[i].text; const k = Math.floor(clamp((p - 1.0 - i * 0.6) / 3.2) * tx.length); c.querySelector('.tx').textContent = tx.slice(0, k); });
+    const q = out((p - 5.8) / 0.6); $('#alert').style.opacity = q; $('#alert').style.transform = `translateX(${(1 - q) * -30}px)`; }
+  // S5
+  { const p = t - 28; stagger([...chs.children], p - 0.4, 2.2, 0.55, (el, q) => { el.style.opacity = q; el.style.transform = `translateY(${(1 - q) * 30}px)`; });
+    const ic = [...chs.children][D.chapters.findIndex(c => c.intercut)];
+    if (ic) { const cells = ic.querySelectorAll('.bar i'); const n = cells.length / 2;
+      cells.forEach((cell, j) => { cell.style.opacity = clamp((p - 3.2 - (j % n) * 0.18) / 0.3); }); }
+    $('#excluded').style.opacity = out((p - 6.0) / 0.7); }
+  // S6
+  { const p = clamp((t - 37 - 0.6) / 6.4); const cut = p * T;
+    [...tl.children].forEach((el, i) => { const s = D.shots[i]; el.style.opacity = s.start < cut ? 1 : 0; });
+    $('#clock').textContent = fmt(Math.min(T, cut)); $('#clock').style.color = p >= 1 ? 'var(--accent)' : 'var(--ink)';
+    [...$('#tlch').children].forEach((el, i) => { const s = D.shots.find(x => x.chapter === D.chapters[i].no); el.style.opacity = s.start < cut ? 1 : 0; }); }
+  // S7
+  { const p = t - 46; const lines = [];
+    termLines.forEach(([cls, txt], i) => { const st = i === 0 ? 0.3 : 1.6 + (i - 1) * 0.7;
+      if (p < st) return; const k = i === 0 ? Math.floor(clamp((p - st) / 1.2) * txt.length) : txt.length;
+      lines.push(`<div class="${cls}">${txt.slice(0, k)}</div>`); });
+    $('#term').innerHTML = lines.join(''); }
+  // S8
+  { const p = t - 53; [...jy.querySelectorAll('.track')].forEach((tr, i) => { const q = out((p - 0.2 - i * 0.35) / 0.6); tr.style.opacity = q; });
+    $('#ph').style.left = `${160 + clamp((p - 0.8) / 3.6) * 1600}px`;
+    const q = out((p - 4.0) / 0.7); $('#end').style.opacity = q; $('#end').style.transform = `translateY(${(1 - q) * 20}px)`;
+    jy.style.opacity = 1 - 0.55 * q; }
+};
+window.render(0);
+window.READY = true;
+</script>
+</body>
+</html>
