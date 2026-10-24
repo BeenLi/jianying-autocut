@@ -14,7 +14,7 @@
   <a href="./LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/License-MIT-1F6FEB?style=flat-square"></a>
 </p>
 
-https://github.com/user-attachments/assets/49aefca2-ebe3-462f-954b-6b11cf4b07e2
+https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 
 <p align="center"><sub>60 秒演示：62 段原始素材 → 盘点打分 → MiMo 看懂素材 → 写故事 → 分镜 → 剪映草稿。演示素材来自一次真实的庐山徒步，人脸已打码。
 ⬇ <a href="https://github.com/BeenLi/jianying-autocut/raw/main/docs/promo/promo.mp4">下载 mp4</a></sub></p>
