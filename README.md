@@ -15,8 +15,8 @@
 </p>
 
 <p align="center">
-  <a href="docs/promo/promo.mp4"><img alt="宣传片：62 段原始素材 → 盘点打分 → MiMo 看懂素材 → 写故事 → 分镜 → 剪映草稿" src="docs/promo/promo.gif" width="100%"></a>
-  <br><sub>▶ 点击看 1080p 带配乐版（60 秒）。演示素材来自一次真实的庐山徒步，人脸已打码。</sub>
+  <img alt="宣传片：62 段原始素材 → 盘点打分 → MiMo 看懂素材 → 写故事 → 分镜 → 剪映草稿" src="docs/promo/promo.gif" width="100%">
+  <br><sub>⬇ <a href="https://github.com/BeenLi/jianying-autocut/raw/main/docs/promo/promo.mp4">下载 1080p 带配乐版（mp4 · 60 秒 · 6 MB）</a>。演示素材来自一次真实的庐山徒步，人脸已打码。</sub>
 </p>
 
 ---
