@@ -1,0 +1,22 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: ./run_tests.sh
+      # npx skills add 只复制 skills/jianying-autocut/：装一份到临时目录，确认脚本和 vendor 都在、能跑
+      - name: Install the skill with npx skills add
+        run: |
+          T=$(mktemp -d) && cd "$T"
+          npx -y skills add "$GITHUB_WORKSPACE" -a claude-code -y
+          C="$T/.claude/skills/jianying-autocut"
+          test -f "$C/SKILL.md"
+          uv run -q --script "$C/scripts/probe.py" --help
+          python3 -I -c "import os, sys; sys.path.insert(0, '$C/scripts'); import common; assert os.path.exists(common.UNDERSTAND_CLI), common.UNDERSTAND_CLI"
