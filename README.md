@@ -97,9 +97,27 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 
 ## 安装与使用
 
+三种方式任选其一：
+
 ```bash
-git clone https://github.com/BeenLi/jianying-autocut.git ~/.claude/skills/jianying-autocut
+# 1. skills CLI：把技能复制到 ~/.claude/skills/jianying-autocut；以后用 `npx skills update -g` 更新
+npx skills add BeenLi/jianying-autocut -g -a claude-code
 ```
+
+```text
+# 2. Claude Code 插件：在 Claude Code 里运行；技能名会带插件前缀（jianying-autocut:jianying-autocut）
+/plugin marketplace add BeenLi/jianying-autocut
+/plugin install jianying-autocut@jianying-autocut
+```
+
+```bash
+# 3. git clone + 软链，适合开发：改了仓库立即生效
+git clone https://github.com/BeenLi/jianying-autocut.git && cd jianying-autocut
+mkdir -p ~/.claude/skills
+ln -sfn "$PWD/skills/jianying-autocut" ~/.claude/skills/jianying-autocut
+```
+
+skills CLI 只复制 `skills/jianying-autocut/` 这一个文件夹（技能说明、脚本、收录的 vendor 模块），不带 `docs/` 里的宣传片和设计文档；插件会克隆整个仓库，再从这个文件夹读取技能。
 
 然后在 Claude Code 里说：
 
@@ -113,7 +131,7 @@ git clone https://github.com/BeenLi/jianying-autocut.git ~/.claude/skills/jianyi
 uv run --script $S/probe.py ~/Videos/my-trip
 uv run --script $S/frames.py --work $W
 uv run --script $S/understand.py --work $W --context "两天徒步"     # 或 --no-understanding
-# Claude 写 $W/recap_story_plan.json（格式见 references/story_plan.md）
+# Claude 写 $W/recap_story_plan.json（格式见 skills/jianying-autocut/references/story_plan.md）
 uv run --script $S/story.py --work $W --from-recap --exclude c001-c010
 uv run --script $S/plan.py --work $W --target 5:00 --dry-run
 uv run --script $S/plan.py --work $W --target 5:00
@@ -138,20 +156,22 @@ uv run --script $S/build.py --work $W --name 我的旅行粗剪 --titles --bgm ~
 ## 目录结构
 
 ```text
-SKILL.md                    给 Agent 的使用说明（技能入口）
-scripts/                    probe · frames · understand · story · plan · build · common
-references/                 写故事指引（story_plan.md）、实测踩坑（pitfalls.md）
-tests/                      pytest（./run_tests.sh）
-vendor/video-understanding/ 收录的素材理解模块（MIT，见下方鸣谢）
-vendor/video-script-refs/   video-script 的导演方法文档（MIT）
-docs/                       设计规格、实现计划、工作流图（workflow.html / workflow.png）
+skills/jianying-autocut/                技能本体（npx skills / 插件安装的就是这个文件夹）
+  SKILL.md                              给 Agent 的使用说明（技能入口）
+  scripts/                              probe · frames · understand · story · plan · build · common
+  references/                           写故事指引（story_plan.md）、实测踩坑（pitfalls.md）
+  vendor/video-understanding/           收录的素材理解模块（MIT，见下方鸣谢）
+  vendor/video-script-refs/             video-script 的导演方法文档（MIT）
+.claude-plugin/marketplace.json         Claude Code 插件清单
+tests/                                  pytest（./run_tests.sh）
+docs/                                   设计规格、实现计划、工作流图、宣传片
 ```
 
 ## 鸣谢
 
 - **[GuanYixuan/pyJianYingDraft](https://github.com/GuanYixuan/pyJianYingDraft)**（Apache-2.0）：Python 剪映草稿生成库，本项目写草稿的基础。
 - **[aoguai/pyJianYingDraft](https://github.com/aoguai/pyJianYingDraft)**（Apache-2.0）：维护版，支持剪映 7+ / 11.6 的新草稿格式；本项目锁定使用其提交 `69cee12`。
-- **[zenstory-ai/video-recap-skills](https://github.com/zenstory-ai/video-recap-skills)**（MIT, © 2026 PiteChen）：本项目收录了其中的 `video-understanding`（场景、ASR、VLM、理解简报），并沿用 `video-script` 的故事脚本格式与导演方法。许可证原文见 [`vendor/LICENSE-video-recap-skills`](vendor/LICENSE-video-recap-skills)。
+- **[zenstory-ai/video-recap-skills](https://github.com/zenstory-ai/video-recap-skills)**（MIT, © 2026 PiteChen）：本项目收录了其中的 `video-understanding`（场景、ASR、VLM、理解简报），并沿用 `video-script` 的故事脚本格式与导演方法。许可证原文见 [`vendor/LICENSE-video-recap-skills`](skills/jianying-autocut/vendor/LICENSE-video-recap-skills)。
 - **[cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design)**（MIT）：工作流图用它的设计系统绘制。
 - **[小米 MiMo](https://platform.xiaomimimo.com)**：素材理解所用的 VLM / ASR 模型。
 - 网络教程《剪映自动化粗剪 · 即抄提示词（适配剪映 11.6）》：版本号对齐、素材零复制等踩坑经验的来源。

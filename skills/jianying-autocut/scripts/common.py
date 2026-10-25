@@ -13,9 +13,9 @@ VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".mts", ".m2ts", ".mxf"}
 JIANYING_APP = "/Applications/VideoFusion-macOS.app"
 DRAFTS_DIR = os.path.expanduser(
     "~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft")
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # video-understanding 收录在仓库 vendor/ 下（MIT，来自 zenstory-ai/video-recap-skills）
-UNDERSTAND_CLI = os.path.join(REPO, "vendor", "video-understanding", "scripts", "understand.py")
+UNDERSTAND_CLI = os.path.join(SKILL_DIR, "vendor", "video-understanding", "scripts", "understand.py")
 
 RECHARGE_HINT = (
     "MiMo 不可用（未配置 key、余额不足或已欠费）。\n"

@@ -1,0 +1,17 @@
+{
+  "name": "jianying-autocut",
+  "owner": {
+    "name": "BeenLi"
+  },
+  "metadata": {
+    "description": "Claude Code skill that turns a folder of vlog / travel footage into a story-driven rough-cut draft for JianYing Pro (剪映专业版 11.6, macOS)."
+  },
+  "plugins": [
+    {
+      "name": "jianying-autocut",
+      "source": "./",
+      "description": "Understand footage with Xiaomi MiMo, write a story plan (hook / build-up / turn / climax / ending), pick shots by chapter quota and pacing, and generate a JianYing draft with chapter titles and BGM.",
+      "strict": false
+    }
+  ]
+}

@@ -10,7 +10,7 @@ description: >
 
 # jianying-autocut：素材文件夹 → 讲故事的剪映粗剪草稿
 
-`S=~/.claude/skills/jianying-autocut/scripts`，一律 `uv run --script $S/<x>.py` 调用（依赖写在脚本头里，首次运行自动装）。
+`S=<本 SKILL.md 所在目录>/scripts`（npx skills 或软链安装时就是 `~/.claude/skills/jianying-autocut/scripts`；插件安装时在插件缓存目录里），一律 `uv run --script $S/<x>.py` 调用（依赖写在脚本头里，首次运行自动装）。
 工作目录 `W` 默认是 `<素材目录>/_autocut`；各步只通过 W 里的文件衔接，任何一步都能单独重跑。
 
 ## 多台设备混拍：先让用户自己校正时间
