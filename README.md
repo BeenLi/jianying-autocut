@@ -37,7 +37,7 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | **0&nbsp;提需求**<br><sub>你</sub> | 素材目录、目标时长、一句话背景、要不要 BGM | — |
 | **1&nbsp;盘点**<br><sub>`probe.py`</sub> | 时长、分辨率、拍摄时间、静音段；编号随文件稳定 | `inventory.csv` |
 | **2&nbsp;抽帧打分**<br><sub>`frames.py`</sub> | 每 8 秒抽关键帧，判糊、判曝光，拼联系表 | `frames.csv` `contact/` |
-| **3&nbsp;看懂素材**<br><sub>MiMo · `understand.py`</sub> | 拼成 720p 代理长片只跑一次：场景描述 + 语音转写，再拆回每段；逐帧判方向 | `clip_understanding.json` |
+| **3&nbsp;看懂素材**<br><sub>MiMo · `understand.py`</sub> | 拼成 720p 代理长片只跑一次：场景描述 + 语音转写，再拆回每段；逐张缩略图判方向 | `clip_understanding.json` |
 | **4&nbsp;写故事**<br><sub>Claude</sub> | 钩子 / 铺垫 / 转折 / 高潮 / 收尾；剔除无关素材；可选平行蒙太奇 | `story_plan.json` |
 | **5&nbsp;分镜**<br><sub>`plan.py`</sub> | 分配时长，按长短节奏挑镜头，避坏帧、吸附静音，精确到微秒；先 dry-run | `shots.csv` |
 | **6&nbsp;生成草稿**<br><sub>`build.py`</sub> | 主视频轨 + 章节标题 + BGM，写完读回自检 | 剪映草稿 |
