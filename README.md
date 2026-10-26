@@ -1,5 +1,7 @@
 <h1 align="center">jianying-autocut</h1>
 
+<p align="center"><b>简体中文</b> | <a href="README.en.md">English</a></p>
+
 <p align="center">
   <b>把一个装满旅行 / vlog 素材的文件夹，变成剪映专业版能直接打开、按故事排好的粗剪草稿。</b><br>
   先让 AI 看懂素材，再写故事脚本，最后按节奏自动挑镜头、生成带章节标题和 BGM 的剪映草稿。你只需要在剪映里精修和导出。
