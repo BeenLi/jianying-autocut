@@ -10,7 +10,7 @@
   · 素材零复制：只引用绝对路径；时长 / 宽高取自 inventory.csv 直接注入，不再逐个解析文件
   · 时间：一律整数微秒 Timerange(起点, 时长)，下一段起点 = 上一段终点
   · 清场：剪映在跑就拒绝；同名草稿默认拒绝，--replace 才整目录删掉再生成
-  · BGM：可多次 --bgm，依次铺满成片；歌比成片短就循环，比成片长就截断；首尾淡入淡出
+  · BGM：可多次 --bgm，按歌长比例依次铺满成片；歌比成片短就循环，比成片长就截断；首尾淡入淡出
   · 画面方向：orientation.json 判定整段倒装的素材，片段旋转 180°
   · 写完重新读回来自检：零缝隙零重叠、时长精确、无悬空引用、素材零复制、版本号对齐、BGM 不越界
 只生成草稿，不导出成片——导出请在剪映里手动点。
@@ -158,6 +158,7 @@ def main():
     ap.add_argument("--drafts-dir", default=DRAFTS_DIR, help="剪映「全局设置 → 草稿位置」")
     ap.add_argument("--volume", type=float, help="原声音量，0 = 静音；默认 1，有 BGM 时 0.6")
     ap.add_argument("--bgm", action="append", default=[], help="歌曲路径[:音量[:淡入淡出秒]]，可多次")
+    ap.add_argument("--bgm-plan", help="beatsync.py 生成的 bgm_plan.json（卡点）；给了就不用 --bgm")
     ap.add_argument("--titles", action="store_true", help="每章开头加 3 秒章节标题（文字轨）")
     ap.add_argument("--replace", action="store_true", help="同名草稿已存在时整目录删除后重建")
     ap.add_argument("--extra", help=argparse.SUPPRESS)  # v2 预留：旁白 / 字幕轨
@@ -204,7 +205,7 @@ def main():
     w, h = max((int(r["width"]), int(r["height"])) for p, r in inv.items()
                if p in used and round(int(r["width"]) / int(r["height"]), 2) == main_aspect)
     fps = fps_w.most_common(1)[0][0]
-    volume = args.volume if args.volume is not None else (0.6 if bgms else 1.0)
+    volume = args.volume if args.volume is not None else (0.6 if bgms or args.bgm_plan else 1.0)
 
     if os.path.exists(draft_dir):   # 坑：被剪映打开过的草稿已加密，只能整目录删掉重建
         shutil.rmtree(draft_dir)
@@ -247,13 +248,29 @@ def main():
             script.add_segment(seg, text_track)
 
     bgm_count = 0
-    if bgms:
+    if args.bgm_plan:
+        with open(args.bgm_plan, encoding="utf-8") as f:
+            plan = json.load(f)
         bgm_track = script.append_track(TrackSpec(TrackType.audio, "BGM"))
-        span = total // len(bgms)  # 多首歌平分成片，最后一首吃掉余数
-        for k, b in enumerate(bgms):
+        for b in plan:
             mat = jy.AudioMaterial(b["path"])
-            start = k * span
-            end = total if k == len(bgms) - 1 else (k + 1) * span
+            d = min(int(b["dur_us"]), total - int(b["start_us"]), mat.duration - int(b["src_us"]))
+            seg = jy.AudioSegment(mat, Timerange(int(b["start_us"]), d),
+                                  source_timerange=Timerange(int(b["src_us"]), d), volume=b["gain"])
+            fade = min(round(b["fade"] * US), d // 2)
+            seg.add_fade(0 if b["start_us"] else fade, fade)   # 卡点换歌：只淡出，下一首在拍上直接进
+            script.add_segment(seg, bgm_track)
+            bgm_count += 1
+    elif bgms:
+        bgm_track = script.append_track(TrackSpec(TrackType.audio, "BGM"))
+        songs = [jy.AudioMaterial(b["path"]) for b in bgms]
+        # 按歌长比例分段：成片时长 = 各首歌长之和时，每首歌完整播放、不截断不循环
+        cum = [0]
+        for m in songs:
+            cum.append(cum[-1] + m.duration)
+        for k, (b, mat) in enumerate(zip(bgms, songs)):
+            start = total * cum[k] // cum[-1]
+            end = total * cum[k + 1] // cum[-1]
             segs = bgm_segments(mat.duration, start, end)
             fade = round(b["fade"] * US)
             for i, (t0, s0, d) in enumerate(segs):
@@ -271,14 +288,14 @@ def main():
     sec = d["duration"] / US
     print(f"\n草稿：{draft_dir}")
     print(f"  {len(shots)} 个镜头 / {len(mats)} 段素材 / {len({s['chapter'] for s in shots})} 章"
-          f"{' + 章节标题' if args.titles else ''}{f' + BGM {len(bgms)} 首（{bgm_count} 段）' if bgms else ''}，"
+          f"{' + 章节标题' if args.titles else ''}{f' + BGM {len(bgms)} 首（{bgm_count} 段）' if bgms else (f' + 卡点 BGM {bgm_count} 段' if bgm_count else '')}，"
           f"总长 {int(sec // 60)}:{sec % 60:06.3f}，画布 {w}x{h}@{fps}，原声音量 {volume:g}")
     if errs:
         print("\n校验失败：")
         for e in errs:
             print("  ✗", e)
         sys.exit(1)
-    print("  ✓ 零缝隙零重叠 ✓ 时长精确 ✓ 无悬空引用 ✓ 素材零复制 ✓ 版本号对齐" + (" ✓ BGM 铺满不越界" if bgms else ""))
+    print("  ✓ 零缝隙零重叠 ✓ 时长精确 ✓ 无悬空引用 ✓ 素材零复制 ✓ 版本号对齐" + (" ✓ BGM 铺满不越界" if bgm_count else ""))
     print("\n现在打开剪映，首页就能看到这个草稿。素材文件别移动或改名（草稿里存的是绝对路径）。")
 
 

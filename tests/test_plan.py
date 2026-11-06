@@ -184,3 +184,152 @@ def test_intercut_end_on_b(tmp_path):
     w = _work(tmp_path, [("c001", 90, 0), ("c002", 90, 0), ("c003", 90, 0), ("c004", 90, 0)], [ch])
     rows, _, _ = plan(w, 80 * US, seed=2)
     assert rows[-1]["name"] in ("c001.mp4", "c003.mp4")
+
+
+# ---------- 精简模式（不限时长）：只留关键片段，时长由留下的片段决定 ----------
+
+def test_condense_length_emerges_and_trims_long_clips(tmp_path):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 300, 0), ("c002", 300, 0)], [_ch("a", ["c001", "c002"])])
+    rows, _, dropped = plan_condense(w, per_clip=1, seed=1)
+    assert len(rows) == 2 and not dropped
+    total = sum(r["dur_us"] for r in rows)
+    assert 0 < total < 60 * US                    # 600s 素材只留下每段一个镜头
+    t = 0
+    for r in rows:                                 # 仍然零缝隙
+        assert r["start_us"] == t
+        t += r["dur_us"]
+
+
+def test_condense_per_clip_cap_honored(tmp_path):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 300, 0)], [_ch("a", ["c001"])])
+    rows, _, _ = plan_condense(w, per_clip=2, seed=1)
+    assert len(rows) == 2
+
+
+def test_condense_default_budget_scales_with_clip_length(tmp_path):
+    from plan import Clip, shots_for_clip
+
+    def clip(sec):
+        return Clip({"clip_id": "c", "path": "/x", "name": "x", "shot_time": "", "duration_s": sec}, [], [])
+    budgets = [shots_for_clip(clip(s)) for s in (5, 60, 300, 3600)]
+    assert budgets[0] == 1                         # 短素材至少能留一个镜头
+    assert budgets == sorted(budgets)              # 素材越长，额度不减
+    assert budgets[-1] <= 5                        # 再长的素材也不能无限占镜头
+
+
+def test_condense_pinned_clip_keeps_only_pins(tmp_path):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 300, 0), ("c002", 300, 0)],
+              [_ch("a", ["c001", "c002"], pins=[{"clip_id": "c001", "at": 150.0}])])
+    rows, _, _ = plan_condense(w, per_clip=3, seed=1)
+    c1 = [r for r in rows if r["name"] == "c001.mp4"]
+    assert len(c1) == 1 and c1[0]["in_us"] <= 150 * US < c1[0]["in_us"] + c1[0]["dur_us"]
+    assert sum(r["name"] == "c002.mp4" for r in rows) == 3
+
+
+def test_condense_hook_first_and_short(tmp_path):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 300, 0), ("c002", 300, 0)],
+              [_ch("a", ["c001"]), dict(_ch("h", ["c002"], function="hook"), pool="all")])
+    rows, _, _ = plan_condense(w, per_clip=3, seed=1)
+    assert rows[0]["chapter_function"] == "hook"
+    assert sum(r["chapter_function"] == "hook" for r in rows) == 1   # 没有 pin 的冷开场只取一个最好的镜头
+
+
+def test_condense_drops_and_reports_low_score_bad_and_short_clips(tmp_path):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 30, 0), ("c002", 30, 0), ("c003", 30, 0), ("c004", 2, 0)],
+              [_ch("a", ["c001", "c002", "c003", "c004"])])
+    rows_f = [("c001", t, 0, 0.9) for t in (5.0, 15.0, 25.0)] + \
+             [("c002", t, 0, 0.05) for t in (5.0, 15.0, 25.0)] + \
+             [("c003", t, 1, 0.5) for t in (5.0, 15.0, 25.0)]
+    write_csv(os.path.join(tmp_path, "frames.csv"),
+              [{"clip_id": c, "path": f"/x/{c}.mp4", "t": t, "sharpness": 100, "brightness": 120,
+                "score": s, "bad": b} for c, t, b, s in rows_f],
+              ["clip_id", "path", "t", "sharpness", "brightness", "score", "bad"])
+    rows, _, dropped = plan_condense(w, per_clip=1, min_score=0.2, seed=1)
+    assert {r["name"] for r in rows} == {"c001.mp4"}
+    assert {d["clip_id"] for d in dropped} == {"c002", "c003", "c004"}
+    assert all(d["reason"] for d in dropped)
+
+
+def test_condense_keeps_pin_even_on_low_score_clip(tmp_path):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 30, 0)], [_ch("a", ["c001"], pins=[{"clip_id": "c001", "at": 15.0}])])
+    write_csv(os.path.join(tmp_path, "frames.csv"),
+              [{"clip_id": "c001", "path": "/x/c001.mp4", "t": 15.0, "sharpness": 100, "brightness": 120,
+                "score": 0.01, "bad": 0}],
+              ["clip_id", "path", "t", "sharpness", "brightness", "score", "bad"])
+    rows, _, dropped = plan_condense(w, per_clip=1, min_score=0.5, seed=1)
+    assert len(rows) == 1 and not dropped          # 人工标的关键瞬间优先于自动评分
+
+
+def test_condense_ignores_share_with_warning(tmp_path, capsys):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 300, 0)], [dict(_ch("a", ["c001"]), share=0.5)])
+    rows, _, _ = plan_condense(w, per_clip=1, seed=1)
+    assert rows and "share" in capsys.readouterr().out
+
+
+def test_target_mode_unchanged_by_refactor(tmp_path):
+    w = _work(tmp_path, [("c001", 60, 0), ("c002", 60, 0)], [_ch("a", ["c001", "c002"])])
+    rows, _, short = plan(w, 45 * US, seed=1)
+    assert short == 0 and sum(r["dur_us"] for r in rows) == 45 * US
+
+
+def test_condense_shots_from_one_clip_are_spaced_apart(tmp_path):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 300, 0)], [_ch("a", ["c001"])])
+    rows, _, _ = plan_condense(w, per_clip=2, seed=1)
+    a, b = sorted(rows, key=lambda r: r["in_us"])
+    assert b["in_us"] - (a["in_us"] + a["dur_us"]) >= 60 * US    # 不留相邻的重复画面
+
+
+def test_condense_hook_pin_does_not_remove_clip_from_home_chapter(tmp_path):
+    # 冷开场预告的高光素材，到它自己的章节还要再出现（hook → payoff 呼应）
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 120, 0)],
+              [dict(_ch("h", [], function="hook", pins=[{"clip_id": "c001", "at": 60.0}]), pool="all"),
+               _ch("p", ["c001"], function="payoff")])
+    rows, _, _ = plan_condense(w, per_clip=1, seed=1)
+    assert [r["chapter_function"] for r in rows] == ["hook", "payoff"]
+    (a0, a1), (b0, b1) = [(r["in_us"], r["in_us"] + r["dur_us"]) for r in rows]
+    assert a1 <= b0 or b1 <= a0                    # 两个镜头不重叠
+
+
+# ---------- 故事节奏：快慢跟着章节功能走，agent 可逐章指定 ----------
+
+def _kinds(rows, title):
+    return {r["kind"] for r in rows if r["chapter_title"] == title}
+
+
+def test_condense_rhythm_follows_story_function(tmp_path):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 600, 0), ("c002", 600, 0)],
+              [_ch("s", ["c001"], function="setup"), _ch("e", ["c002"], function="escalation")])
+    rows, _, _ = plan_condense(w, per_clip=4, seed=1)
+    assert "short" not in _kinds(rows, "s")
+    assert "long" not in _kinds(rows, "e")
+
+
+def test_condense_explicit_rhythm_beats_function_default(tmp_path):
+    from plan import plan_condense
+    w = _work(tmp_path, [("c001", 600, 0)], [dict(_ch("s", ["c001"], function="setup"), rhythm="montage")])
+    rows, _, _ = plan_condense(w, per_clip=4, seed=1)
+    assert _kinds(rows, "s") == {"short"} and all(r["dur_us"] <= 4 * US for r in rows)
+
+
+def test_target_mode_ignores_function_default_rhythm(tmp_path):
+    w = _work(tmp_path, [("c001", 600, 0)], [_ch("e", ["c001"], function="escalation")])
+    rows, _, _ = plan(w, 60 * US, seed=1)
+    assert "long" in _kinds(rows, "e")
+
+
+def test_default_budget_values():
+    from plan import Clip, shots_for_clip
+
+    def clip(sec):
+        return Clip({"clip_id": "c", "path": "/x", "name": "x", "shot_time": "", "duration_s": sec}, [], [])
+    assert [shots_for_clip(clip(s)) for s in (5, 60, 300, 3600)] == [1, 1, 3, 5]

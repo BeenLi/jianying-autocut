@@ -37,12 +37,13 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 
 | 步骤 | 做什么 | 产出（`_autocut/` 下） |
 |:--|:--|:--|
-| **0&nbsp;提需求**<br><sub>你</sub> | 素材目录、目标时长、一句话背景、要不要 BGM | — |
+| **0&nbsp;提需求**<br><sub>你</sub> | 素材目录、一句话背景、要不要 BGM | — |
 | **1&nbsp;盘点**<br><sub>`probe.py`</sub> | 时长、分辨率、拍摄时间、静音段；编号随文件稳定 | `inventory.csv` |
 | **2&nbsp;抽帧打分**<br><sub>`frames.py`</sub> | 每 8 秒抽关键帧，判糊、判曝光，拼联系表 | `frames.csv` `contact/` |
 | **3&nbsp;看懂素材**<br><sub>MiMo · `understand.py`</sub> | 拼成 720p 代理长片只跑一次：场景描述 + 语音转写，再拆回每段；逐张缩略图判方向 | `clip_understanding.json` |
 | **4&nbsp;写故事**<br><sub>Claude</sub> | 钩子 / 铺垫 / 转折 / 高潮 / 收尾；剔除无关素材；可选平行蒙太奇 | `story_plan.json` |
-| **5&nbsp;分镜**<br><sub>`plan.py`</sub> | 分配时长，按长短节奏挑镜头，避坏帧、吸附静音，精确到微秒；先 dry-run | `shots.csv` |
+| **5&nbsp;分镜**<br><sub>`plan.py`</sub> | 只留关键片段并列出删除清单，按长短节奏挑镜头，避坏帧、吸附静音；先 dry-run | `shots.csv` |
+| **5.5&nbsp;卡点**<br><sub>`beatsync.py`</sub> | 可选：切点吸附拍点，章节交界落在小节线，可把高潮对到音乐高能段 | `shots.csv`、`bgm_plan.json` |
 | **6&nbsp;生成草稿**<br><sub>`build.py`</sub> | 主视频轨 + 章节标题 + BGM，写完读回自检 | 剪映草稿 |
 | **7&nbsp;精修导出**<br><sub>你</sub> | 剪映里调色、转场、字幕、导出成片 | 成片 |
 
@@ -60,7 +61,7 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | 剔除无关素材 | ✅ | `story.py --exclude c001-c010,…` |
 | 平行蒙太奇 | ✅ | 章节里两条线（如「我们俩」×「爸妈」）交替剪，落在指定的那条线 |
 | 长短镜头节奏 | ✅ | 章内大体按时间，局部调整避免连续长镜头 / 三连短镜头 |
-| 精确成片时长 | ✅ | 整数微秒，镜头间零缝隙零重叠 |
+| 精简素材，时长不设限 | ✅ | 默认只留关键片段，时长由留下的片段决定；也可用 `--target` 指定，精确到微秒 |
 | 章节标题 | ✅ | 每章开头 3 秒文字 |
 | BGM | ✅ | 多首可选；短于成片自动循环、长于成片截断、首尾淡入淡出 |
 | 语音字幕 | ❌ | 未做。在剪映里用「智能字幕」一键生成 |
@@ -73,7 +74,7 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 **输入**
 
 - 素材目录：`.mp4` `.mov` `.m4v` `.mkv` `.avi` `.mts` `.m2ts` `.mxf`（子目录会递归扫描）
-- 目标时长（如 `5:00`）、一句话背景（帮 MiMo 理解）
+- 一句话背景（帮 MiMo 理解）；想要固定时长时再给目标时长（如 `5:00`）
 - BGM（可选）：本地 `.mp3` / `.flac` / `.m4a`（网易云 `.ncm` 是加密格式，不能用）
 
 **输出**：剪映专业版草稿，位于剪映「全局设置 → 草稿位置」（默认 `~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft/<草稿名>/`）
@@ -125,7 +126,7 @@ skills CLI 只复制 `skills/jianying-autocut/` 这一个文件夹（技能说�
 然后在 Claude Code 里说：
 
 ```text
-把 ~/Videos/my-trip 这个文件夹剪成 5 分钟的旅行 vlog，背景是两天徒步，配 ~/Music/xxx.mp3。
+把 ~/Videos/my-trip 这个文件夹剪成旅行 vlog，只留关键片段，背景是两天徒步，配 ~/Music/xxx.mp3。
 ```
 
 也可以手动逐步运行（`S=~/.claude/skills/jianying-autocut/scripts`，`W=<素材目录>/_autocut`）：
@@ -136,8 +137,8 @@ uv run --script $S/frames.py --work $W
 uv run --script $S/understand.py --work $W --context "两天徒步"     # 或 --no-understanding
 # Claude 写 $W/recap_story_plan.json（格式见 skills/jianying-autocut/references/story_plan.md）
 uv run --script $S/story.py --work $W --from-recap --exclude c001-c010
-uv run --script $S/plan.py --work $W --target 5:00 --dry-run
-uv run --script $S/plan.py --work $W --target 5:00
+uv run --script $S/plan.py --work $W --dry-run     # 要固定时长就加 --target 5:00
+uv run --script $S/plan.py --work $W
 # ⌘Q 完全退出剪映
 uv run --script $S/build.py --work $W --name 我的旅行粗剪 --titles --bgm ~/Music/xxx.mp3
 ```

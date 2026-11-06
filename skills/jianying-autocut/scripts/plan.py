@@ -5,9 +5,15 @@
 """第 5 步 分镜规划：story_plan.json + 节奏规则 → shots.csv
 
 用法:
-  uv run --script plan.py --work W --target 10:00 --dry-run   # 先看方案
-  uv run --script plan.py --work W --target 10:00             # 确认后落地
+  uv run --script plan.py --work W --dry-run                  # 精简模式（默认）：只留关键片段，时长由留下的片段决定
+  uv run --script plan.py --work W                            # 确认后落地
+  uv run --script plan.py --work W --target 10:00 [--dry-run] # 定长模式：用户明确要求时长时才用
 
+精简模式：本章 pin 标过的素材只留 pin；其余素材按额度（--per-clip 或 shots_for_clip）取得分最高的窗口，
+同素材的镜头互相隔开；得分低于 --min-score、全是坏帧或太短的素材整段删掉并列出原因；
+没有 pin 的 hook 只取一个镜头。share 只在定长模式有效。
+
+定长模式：
 章节、章节里能用哪些素材、必须出现的瞬间（pins）都来自 story_plan.json；
 本步只负责「每章分多少时长、每个镜头从哪段素材的哪里取」：
   配额   有 share 的章节按比例拿；其余每章保底 20s，剩下按 √可用时长注水分配
@@ -30,6 +36,13 @@ from collections import defaultdict
 from common import US, read_csv, write_csv
 
 RHYTHM = [("long", 12, 18), ("short", 3, 6), ("short", 3, 6), ("mid", 6, 9)]
+# 章节可写 "rhythm": 名字。slow 让内容落地，fast 往前推，montage 整章 2-4s 快切（混剪开头）
+RHYTHMS = {"normal": RHYTHM,
+           "slow": [("long", 12, 18), ("mid", 6, 9)],
+           "fast": [("short", 3, 6), ("short", 3, 6), ("mid", 6, 9)],
+           "montage": [("short", 2, 4)]}
+# 精简模式下，没写 rhythm 的章节按故事功能取节奏（定长模式不用这张表）
+FUNCTION_RHYTHM = {"hook": "fast", "setup": "slow", "turn": "normal", "escalation": "fast", "payoff": "slow"}
 MIN_SHOT = 2 * US          # 再短的镜头在成片里就是闪一下，不要
 EDGE = int(0.5 * US)       # 素材首尾 0.5s 常是按快门的晃动，不取
 GAP = 1 * US               # 同一素材两次取用之间至少隔 1s
@@ -37,6 +50,8 @@ STEP = int(0.5 * US)       # 候选窗口起点步长
 REUSE_DECAY = 0.6          # 同一素材每多用一次，得分乘这个系数
 CHAPTER_FLOOR = 20 * US    # 每章保底时长（素材够的话）
 SNAP_MAX = int(1.5 * US)   # 静音吸附最多平移这么多
+MIN_KEEP_SCORE = 0.2       # 精简模式：最好的窗口都低于这个分，整段素材就删掉
+NO_LIMIT = 10 ** 15        # 精简模式没有总时长配额
 
 FIELDS = ["idx", "chapter", "chapter_title", "chapter_function", "kind", "name", "source",
           "in_s", "dur_s", "start_s", "in_us", "dur_us", "start_us", "score"]
@@ -78,6 +93,7 @@ class Clip:
         self.frames = sorted(frames)        # [(t_us, score, bad)]
         self.silences = silences            # [(s0_us, s1_us)]
         self.used = []                      # [(in_us, out_us)]
+        self.gap = GAP                      # 同素材两次取用的最小间隔（精简模式会放大，避免留下相邻的重复画面）
 
     @property
     def usable(self):
@@ -104,7 +120,7 @@ class Clip:
         return sum(s for s, _ in inside) / len(inside)
 
     def free(self, a, d):
-        return all(a + d + GAP <= u0 or a >= u1 + GAP for u0, u1 in self.used)
+        return all(a + d + self.gap <= u0 or a >= u1 + self.gap for u0, u1 in self.used)
 
     def feasible(self, a, d):
         return EDGE <= a <= self.dur - EDGE - d and self.free(a, d) and self.window_score(a, d) is not None
@@ -136,8 +152,8 @@ class Clip:
     def longest_free(self):
         segs, cur = [], EDGE
         for u0, u1 in sorted(self.used):
-            segs.append(u0 - GAP - cur)
-            cur = u1 + GAP
+            segs.append(u0 - self.gap - cur)
+            cur = u1 + self.gap
         segs.append(self.dur - EDGE - cur)
         return max(segs + [0])
 
@@ -230,13 +246,15 @@ def place_pin(c, at, d):
     return None
 
 
-def place_pins(pool, quota, rng, pins):
+def place_pins(pool, quota, rng, pins, rhythm=RHYTHM):
     """先放必须出现的瞬间。返回 (shots, 剩余配额, 已用的节奏位置)。"""
     shots, remaining, k = [], quota, 0
     for p in pins:
         c = pool.get(p["clip_id"])
-        kind, lo, hi = RHYTHM[k % len(RHYTHM)]
+        kind, lo, hi = rhythm[k % len(rhythm)]
         d = min(round(rng.uniform(lo, hi) * US), remaining)
+        if c is not None:
+            d = min(d, c.longest_free())   # 素材比节奏要的镜头短时，按素材能给的长度放
         if c is None or d < MIN_SHOT:
             why = "素材不在本章可选范围" if c is None else "本章配额已用完（给章节加 share 或减少 pins）"
             print(f"  ⚠ pin {p['clip_id']}@{p['at']}s 没放进去：{why}")
@@ -284,20 +302,20 @@ def pick_one(clips, d, kind):
     return {"kind": kind, "clip": c, "in_us": a, "dur_us": d, "score": round(s, 3)}
 
 
-def _next_len(rng, k, remaining):
-    kind, lo, hi = RHYTHM[k % len(RHYTHM)]
+def _next_len(rng, k, remaining, rhythm=RHYTHM):
+    kind, lo, hi = rhythm[k % len(rhythm)]
     d = min(round(rng.uniform(lo, hi) * US), remaining)
     if remaining - d < MIN_SHOT:      # 别留一个 <2s 的尾巴，并进当前镜头
         d = remaining
     return kind, d
 
 
-def fill(pool, remaining, rng, k=0):
+def fill(pool, remaining, rng, k=0, rhythm=RHYTHM):
     """按节奏在 pool 里挑镜头填满 remaining。返回 (shots, 填不满的差额)。"""
     shots = []
     clips = list(pool.values())
     while remaining > 0 and clips:
-        kind, d = _next_len(rng, k, remaining)
+        kind, d = _next_len(rng, k, remaining, rhythm)
         k += 1
         shot = pick_one(clips, d, kind)
         if shot is None:
@@ -401,8 +419,8 @@ def _sort(shots):
     return sorted(shots, key=lambda s: (s["clip"].shot_time, s["clip"].name, s["in_us"]))
 
 
-def plan(work, target_us, seed=7):
-    """返回 (shots 行列表, 章节摘要列表, 差额微秒)。"""
+def load_story(work):
+    """inventory + story_plan → (clips, chapters)。"""
     clips, _ = load_clips(work)
     with open(os.path.join(work, "story_plan.json"), encoding="utf-8") as f:
         story = json.load(f)
@@ -410,32 +428,19 @@ def plan(work, target_us, seed=7):
     in_story = [c for c in clips if any(c in ch.get("clip_ids", []) for ch in story["chapters"])]
     chapters = []
     for no, ch in enumerate(story["chapters"], 1):
-        ids = [c for c in ch.get("clip_ids", []) if c in clips and clips[c].usable >= MIN_SHOT]
+        listed = [c for c in ch.get("clip_ids", []) if c in clips]
+        ids = [c for c in listed if clips[c].usable >= MIN_SHOT]
         pool_ids = in_story if ch.get("pool") == "all" else ids
         chapters.append({"no": no, "title": ch.get("title", ch["id"]), "function": ch.get("function", ""),
                          "share": ch.get("share"), "pins": ch.get("pins", []), "intercut": ch.get("intercut"),
+                         "rhythm": RHYTHMS.get(ch.get("rhythm"), RHYTHM), "rhythm_name": ch.get("rhythm"), "listed": listed, "own": ids,
                          "pool": {c: clips[c] for c in pool_ids if clips[c].usable >= MIN_SHOT},
                          "good_us": sum(clips[c].good_usable for c in pool_ids)})
-    quotas = allocate_quota(chapters, target_us)
+    return clips, chapters
 
-    rng = random.Random(seed)
-    # 先给所有章节放 pins，再逐章补镜头：免得前面 pool=all 的章节把后面章节的高光占走
-    placed = [place_pins(ch["pool"], q, rng, ch["pins"]) for ch, q in zip(chapters, quotas)]
-    plans, short_of = [], 0
-    for ch, (shots, left, k) in zip(chapters, placed):
-        if ch["intercut"]:
-            more, left = fill_intercut(ch["pool"], ch["intercut"], left, rng, k, shots)
-        else:
-            more, left = fill(ch["pool"], left, rng, k)
-        plans.append(shots + more)
-        short_of += left
-    # good_us 只是估算：差额外溢给剩余空闲素材最多的章节，保证总长仍然精确
-    for i in spill_order(chapters):
-        if not short_of:
-            break
-        extra, short_of = fill(chapters[i]["pool"], short_of, rng)
-        plans[i] = plans[i] + extra
 
+def assemble(chapters, plans):
+    """各章镜头 → 成片顺序的 shots 行 + 章节摘要。hook 最前；时间首尾相接。"""
     order = [i for i, ch in enumerate(chapters) if ch["function"] == "hook"] + \
             [i for i, ch in enumerate(chapters) if ch["function"] != "hook"]
     rows, t, summary = [], 0, []
@@ -455,19 +460,121 @@ def plan(work, target_us, seed=7):
                          "start_s": round(t / US, 3), "in_us": s["in_us"], "dur_us": s["dur_us"],
                          "start_us": t, "score": s["score"]})
             t += s["dur_us"]
+    return rows, summary
+
+
+def plan(work, target_us, seed=7):
+    """定长模式。返回 (shots 行列表, 章节摘要列表, 差额微秒)。"""
+    _, chapters = load_story(work)
+    quotas = allocate_quota(chapters, target_us)
+
+    rng = random.Random(seed)
+    # 先给所有章节放 pins，再逐章补镜头：免得前面 pool=all 的章节把后面章节的高光占走
+    placed = [place_pins(ch["pool"], q, rng, ch["pins"], ch["rhythm"]) for ch, q in zip(chapters, quotas)]
+    plans, short_of = [], 0
+    for ch, (shots, left, k) in zip(chapters, placed):
+        if ch["intercut"]:
+            more, left = fill_intercut(ch["pool"], ch["intercut"], left, rng, k, shots)
+        else:
+            more, left = fill(ch["pool"], left, rng, k, ch["rhythm"])
+        plans.append(shots + more)
+        short_of += left
+    # good_us 只是估算：差额外溢给剩余空闲素材最多的章节，保证总长仍然精确
+    for i in spill_order(chapters):
+        if not short_of:
+            break
+        extra, short_of = fill(chapters[i]["pool"], short_of, rng, rhythm=chapters[i]["rhythm"])
+        plans[i] = plans[i] + extra
+
+    rows, summary = assemble(chapters, plans)
     return rows, summary, short_of
+
+
+def shots_for_clip(c):
+    """精简模式下，一段没有 pin 的素材默认最多留几个镜头。c.usable 是可用时长（微秒）。"""
+    return min(5, 1 + int((c.usable / US / 60) ** 0.5))   # 平方根增长：长素材多留，但不会占满成片
+
+
+def _keep_best(c, budget, min_score, rhythm, rng, k, reasons):
+    """从素材 c 里最多取 budget 个镜头，彼此隔开；不够好就停。返回 (shots, 节奏位置)。"""
+    c.gap = max(GAP, c.usable // (2 * (budget + len(c.used))))
+    shots = []
+    while len(shots) < budget:
+        kind, d = _next_len(rng, k, NO_LIMIT, rhythm)
+        k += 1
+        shot = pick_one([c], d, kind)
+        if shot is None:
+            reasons.setdefault(c.clip_id, "没有不含坏帧的窗口")
+            break
+        if shot["score"] < min_score:
+            c.used.pop()
+            reasons.setdefault(c.clip_id, f"画面得分低（{shot['score']:g} < {min_score:g}）")
+            break
+        shots.append(shot)
+    return shots, k
+
+
+def plan_condense(work, per_clip=None, min_score=MIN_KEEP_SCORE, seed=7):
+    """精简模式：只留关键片段，总时长由留下的片段决定。
+    返回 (shots 行列表, 章节摘要列表, 被删素材 [{clip_id, name, reason}])。"""
+    clips, chapters = load_story(work)
+    if any(ch["share"] for ch in chapters):
+        print("  ⚠ 精简模式没有目标时长，章节的 share 被忽略（要按比例分配请用 --target）")
+    for ch in chapters:
+        if not ch["rhythm_name"]:
+            ch["rhythm"] = RHYTHMS[FUNCTION_RHYTHM.get(ch["function"], "normal")]
+    rng = random.Random(seed)
+    placed = [place_pins(ch["pool"], NO_LIMIT, rng, ch["pins"], ch["rhythm"]) for ch in chapters]
+    pinned = {s["clip"].clip_id for shots, _, _ in placed for s in shots}
+    plans = [list(shots) for shots, _, _ in placed]
+    reasons = {}
+    # hook 先挑，让冷开场拿到最好的窗口；被 hook 用过的素材在自己的章节仍有额度（hook → payoff 呼应）
+    for i in sorted(range(len(chapters)), key=lambda i: chapters[i]["function"] != "hook"):
+        ch, k = chapters[i], placed[i][2]
+        pinned_here = {s["clip"].clip_id for s in plans[i]}
+        if ch["function"] == "hook" or not ch["own"]:
+            if not plans[i]:     # 有 pin 就只留 pin；否则只取一个最好的镜头
+                kind, d = _next_len(rng, k, NO_LIMIT, ch["rhythm"])
+                candidates = [c for cid, c in ch["pool"].items() if cid not in pinned]
+                shot = pick_one(candidates, d, kind)
+                if shot:
+                    plans[i].append(shot)
+            continue
+        for c in sorted((clips[cid] for cid in ch["own"]), key=lambda c: (c.shot_time, c.name)):
+            if c.clip_id not in pinned_here:
+                budget = per_clip or shots_for_clip(c)
+                shots, k = _keep_best(c, budget, min_score, ch["rhythm"], rng, k, reasons)
+                plans[i] += shots
+    dropped = []
+    for ch in chapters:
+        for cid in ch["listed"]:
+            c = clips[cid]
+            if not c.used:
+                why = f"太短（可用不足 {MIN_SHOT // US}s）" if c.usable < MIN_SHOT else \
+                    reasons.get(cid, "冷开场只取一个镜头")
+                dropped.append({"clip_id": cid, "name": c.name, "reason": why})
+    rows, summary = assemble(chapters, plans)
+    return rows, summary, dropped
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--work", required=True)
-    ap.add_argument("--target", required=True, help="成片时长，如 10:00 或 600")
+    ap.add_argument("--target", help="成片时长，如 10:00 或 600；不写就是精简模式，时长由留下的片段决定")
+    ap.add_argument("--per-clip", type=int, help="精简模式：每段素材最多留几个镜头（默认按素材长度）")
+    ap.add_argument("--min-score", type=float, default=MIN_KEEP_SCORE, help="精简模式：低于此分的素材整段删掉")
     ap.add_argument("--seed", type=int, default=7, help="换个数能换一版镜头时长")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    target = parse_target(args.target)
-    rows, summary, short_of = plan(args.work, target, args.seed)
+    target = parse_target(args.target) if args.target else None
+    short_of, dropped = 0, []
+    if target is not None and (args.per_clip or args.min_score != MIN_KEEP_SCORE):
+        print("  ⚠ --per-clip / --min-score 只在精简模式有效，定长模式下被忽略")
+    if target is None:
+        rows, summary, dropped = plan_condense(args.work, args.per_clip, args.min_score, args.seed)
+    else:
+        rows, summary, short_of = plan(args.work, target, args.seed)
     print(f"{'章节':<16} {'功能':<10} {'素材':>4} {'可用':>8} {'实得':>8} {'镜头':>4} {'均长':>6}  长/中/短")
     for ch in summary:
         n = len(ch["shots"]) or 1
@@ -476,8 +583,14 @@ def main():
               f"{fmt(ch['got_us']):>8} {len(ch['shots']):>4} {ch['got_us'] / n / US:>5.1f}s  {mix}")
     total = sum(r["dur_us"] for r in rows)
     if rows:
-        print(f"\n合计 {len(rows)} 个镜头，总长 {fmt(total)}（目标 {fmt(target)}），"
+        print(f"\n合计 {len(rows)} 个镜头，总长 {fmt(total)}{f'（目标 {fmt(target)}）' if target else ''}，"
               f"平均 {total / len(rows) / US:.1f}s，用到 {len({r['source'] for r in rows})} 段素材")
+    if dropped:
+        print(f"\n删掉 {len(dropped)} 段素材（想留哪段就在 story_plan 里给它加 pin）：")
+        for d in dropped:
+            print(f"  {d['clip_id']} {d['name']}：{d['reason']}")
+    if not rows:
+        sys.exit("一个镜头都没留下：检查 story_plan 的 clip_ids，或调低 --min-score")
     if short_of:
         sys.exit(f"素材不够，共差 {fmt(short_of)}：减少目标时长，或在 story_plan 里给章节加素材")
     if args.dry_run:

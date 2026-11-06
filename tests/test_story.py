@@ -64,3 +64,31 @@ def test_validate_intercut_ids_must_be_in_chapter():
                           "intercut": {"a": ["c001"], "b": ["c009"], "end_on": "a"}}]}
     errs = validate(plan, {"c001", "c002", "c009"})
     assert any("intercut" in e for e in errs)
+
+
+def test_key_moments_become_pins_in_addition_to_must_keep():
+    beats = [{"beat_id": "b1", "source_start": 0, "source_end": 30, "function": "setup", "event": "出发",
+              "must_keep_moment": "12.5", "key_moments": [3.0, 25.0, "第 22 秒回头"]}]
+    ch, warn = beats_to_chapters(beats, PM, USE)
+    assert ch[0]["pins"] == [{"clip_id": "c001", "at": 2.5}, {"clip_id": "c000", "at": 3.0},
+                             {"clip_id": "c002", "at": 5.0}, {"clip_id": "c002", "at": 2.0}]
+    assert not warn
+
+
+def test_key_moment_outside_chapter_warns():
+    beats = [{"beat_id": "b1", "source_start": 0, "source_end": 10, "function": "setup", "event": "a",
+              "key_moments": [55.0]}]
+    ch, warn = beats_to_chapters(beats, PM, USE)
+    assert ch[0]["pins"] == [] and any("55" in w for w in warn)
+
+
+def test_beat_rhythm_passes_through_to_chapter():
+    beats = [{"beat_id": "b1", "source_start": 0, "source_end": 30, "function": "setup", "event": "a", "rhythm": "slow"}]
+    ch, _ = beats_to_chapters(beats, PM, USE)
+    assert ch[0]["rhythm"] == "slow"
+
+
+def test_validate_rejects_unknown_rhythm():
+    from story import validate
+    errs = validate({"chapters": [{"id": "a", "clip_ids": [], "rhythm": "turbo"}]}, set())
+    assert any("rhythm" in e for e in errs)

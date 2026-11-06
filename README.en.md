@@ -37,12 +37,13 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 
 | Step | What happens | Output (under `_autocut/`) |
 |:--|:--|:--|
-| **0&nbsp;Request**<br><sub>you</sub> | Footage folder, target length, one-line background, BGM or not | — |
+| **0&nbsp;Request**<br><sub>you</sub> | Footage folder, one-line background, BGM or not | — |
 | **1&nbsp;Inventory**<br><sub>`probe.py`</sub> | Duration, resolution, capture time, silent stretches; clip IDs stay stable per file | `inventory.csv` |
 | **2&nbsp;Frame scoring**<br><sub>`frames.py`</sub> | Key frame every 8 s, blur and exposure checks, contact sheets | `frames.csv` `contact/` |
 | **3&nbsp;Understand footage**<br><sub>MiMo · `understand.py`</sub> | Joins everything into one 720p proxy and runs once: scene descriptions + speech transcription, then splits back per clip; per-thumbnail orientation check | `clip_understanding.json` |
 | **4&nbsp;Write the story**<br><sub>Claude</sub> | Hook / setup / turn / climax / ending; drops unrelated footage; optional parallel montage | `story_plan.json` |
-| **5&nbsp;Shot plan**<br><sub>`plan.py`</sub> | Allocates time, picks shots with a long/short rhythm, avoids bad frames, snaps to silence, microsecond-exact; dry-run first | `shots.csv` |
+| **5&nbsp;Shot plan**<br><sub>`plan.py`</sub> | Keeps only key segments and lists what it drops, picks shots with a long/short rhythm, avoids bad frames, snaps to silence; dry-run first | `shots.csv` |
+| **5.5&nbsp;Beat sync**<br><sub>`beatsync.py`</sub> | Optional: snaps cuts to beats and chapter changes to bars, can align the climax with a high-energy section of the song | `shots.csv`, `bgm_plan.json` |
 | **6&nbsp;Build draft**<br><sub>`build.py`</sub> | Main video track + chapter titles + BGM, read back and self-checked after writing | JianYing draft |
 | **7&nbsp;Polish and export**<br><sub>you</sub> | Color, transitions, subtitles and export in JianYing | Final video |
 
@@ -60,7 +61,7 @@ Without a MiMo key (or with too little balance) it **reminds you to top up**; yo
 | Drop unrelated footage | ✅ | `story.py --exclude c001-c010,…` |
 | Parallel montage | ✅ | Two threads in one chapter (e.g. "the two of us" × "our parents") cut alternately, ending on the thread you choose |
 | Long/short shot rhythm | ✅ | Roughly chronological within a chapter, locally reordered to avoid back-to-back long shots or three short shots in a row |
-| Exact final length | ✅ | Integer microseconds, no gaps or overlaps between shots |
+| Condensed footage, no length limit | ✅ | Keeps key segments by default, so the kept segments set the length; `--target` sets an exact length instead |
 | Chapter titles | ✅ | 3 seconds of text at the start of each chapter |
 | BGM | ✅ | Several tracks allowed; looped if shorter than the video, trimmed if longer, faded in and out |
 | Speech subtitles | ❌ | Not done. Use JianYing's "智能字幕" (auto captions) for one-click subtitles |
@@ -73,7 +74,7 @@ Without a MiMo key (or with too little balance) it **reminds you to top up**; yo
 **Input**
 
 - Footage folder: `.mp4` `.mov` `.m4v` `.mkv` `.avi` `.mts` `.m2ts` `.mxf` (subfolders are scanned recursively)
-- Target length (e.g. `5:00`) and a one-line background (helps MiMo understand the footage)
+- A one-line background (helps MiMo understand the footage); a target length (e.g. `5:00`) only if you want a fixed one
 - BGM (optional): local `.mp3` / `.flac` / `.m4a` (NetEase Cloud Music `.ncm` files are encrypted and cannot be used)
 
 **Output**: a JianYing Pro draft in JianYing's "Global settings → Draft location" (default `~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft/<draft name>/`)
@@ -125,7 +126,7 @@ The skills CLI copies only the `skills/jianying-autocut/` folder (skill instruct
 Then tell Claude Code:
 
 ```text
-Cut the ~/Videos/my-trip folder into a 5-minute travel vlog. Background: a two-day hike. Use ~/Music/xxx.mp3 as BGM.
+Cut the ~/Videos/my-trip folder into a travel vlog, keeping only the key segments. Background: a two-day hike. Use ~/Music/xxx.mp3 as BGM.
 ```
 
 You can also run the steps by hand (`S=~/.claude/skills/jianying-autocut/scripts`, `W=<footage folder>/_autocut`):
@@ -136,8 +137,8 @@ uv run --script $S/frames.py --work $W
 uv run --script $S/understand.py --work $W --context "two-day hike"     # or --no-understanding
 # Claude writes $W/recap_story_plan.json (format in skills/jianying-autocut/references/story_plan.md)
 uv run --script $S/story.py --work $W --from-recap --exclude c001-c010
-uv run --script $S/plan.py --work $W --target 5:00 --dry-run
-uv run --script $S/plan.py --work $W --target 5:00
+uv run --script $S/plan.py --work $W --dry-run     # add --target 5:00 for a fixed length
+uv run --script $S/plan.py --work $W
 # Fully quit JianYing with ⌘Q
 uv run --script $S/build.py --work $W --name my-trip-rough-cut --titles --bgm ~/Music/xxx.mp3
 ```

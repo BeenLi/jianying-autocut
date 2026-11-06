@@ -13,6 +13,8 @@ recap_story_plan.json 的 beats 时间是「代理长片」上的秒（理解阶
   · 素材归属：素材与哪个 beat 重叠最多就归哪个；一个都不重叠的 beat 丢弃并警告
   · 可用素材不足 20s 的 beat 并入前一个（第一个则并入后一个），并警告
   · must_keep_moment 里的第一个数字当作代理时间 → 映射成 (clip_id, 素材内秒) 的 pin
+  · key_moments（可选，数组）每一项同样取第一个数字映射成 pin，可以标多个关键瞬间
+  · rhythm（可选）原样带到章节，决定这一章的镜头快慢
 """
 import argparse
 import json
@@ -22,6 +24,7 @@ import sys
 from datetime import datetime
 
 from common import read_csv
+from plan import RHYTHMS
 
 MIN_CHAPTER_S = 20.0
 EDGE_S = 0.5
@@ -46,14 +49,18 @@ def beats_to_chapters(beats, proxy_map, usable):
         # 让它从全部素材取镜头（pool=all），pin 也不要求素材归它
         hook = b.get("function") == "hook"
         pins = []
-        m = re.search(r"\d+(?:\.\d+)?", str(b.get("must_keep_moment") or ""))
-        if m:
+        moments = [("must_keep_moment", b.get("must_keep_moment"))] + \
+                  [("key_moments", x) for x in b.get("key_moments") or []]
+        for field, moment in moments:
+            m = re.search(r"\d+(?:\.\d+)?", str("" if moment is None else moment))
+            if not m:
+                continue
             t = float(m.group())
             hit = next((c for c in proxy_map if c["proxy_start"] <= t < c["proxy_end"]), None)
             if hit and (hook or hit["clip_id"] in clips):
                 pins.append({"clip_id": hit["clip_id"], "at": round(t - hit["proxy_start"], 3)})
             else:
-                warns.append(f"beat {b.get('beat_id', i)} 的 must_keep_moment {t}s 不在本章素材内，忽略")
+                warns.append(f"beat {b.get('beat_id', i)} 的 {field} {t}s 不在本章素材内，忽略")
         if not clips and not (hook and pins):
             warns.append(f"beat {b.get('beat_id', i)} 没有素材（时间超出或被相邻 beat 占满），已丢弃")
             continue
@@ -61,6 +68,8 @@ def beats_to_chapters(beats, proxy_map, usable):
                          "title": str(b.get("event") or b.get("beat_id") or f"第{i + 1}章")[:12],
                          "function": b.get("function", "setup"), "clip_ids": clips,
                          "pool": "all" if hook else "own", "pins": pins})
+        if b.get("rhythm"):
+            chapters[-1]["rhythm"] = b["rhythm"]
     # 太短的章节并入相邻章节（hook 本来就该短，不合并）
     k = 0
     while k < len(chapters) and len(chapters) > 1:
@@ -170,6 +179,8 @@ def validate(plan, inv_ids):
                 errs.append(f"章节 {ch.get('id')} 的 intercut 需要 a、b 两条线都有素材")
             if ic.get("end_on", "a") not in ("a", "b"):
                 errs.append(f"章节 {ch.get('id')} 的 intercut.end_on 只能是 a 或 b")
+        if ch.get("rhythm") and ch["rhythm"] not in RHYTHMS:
+            errs.append(f"章节 {ch.get('id')} 的 rhythm 只能是 {'/'.join(RHYTHMS)}")
         if ch.get("share") is not None and not 0 < float(ch["share"]) < 1:
             errs.append(f"章节 {ch.get('id')} 的 share 必须在 0~1 之间")
     if sum(float(ch.get("share") or 0) for ch in plan.get("chapters", [])) > 1:
