@@ -40,14 +40,14 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | **0&nbsp;提需求**<br><sub>你</sub> | 素材目录、一句话背景、要不要 BGM | — |
 | **1&nbsp;盘点**<br><sub>`probe.py`</sub> | 时长、分辨率、拍摄时间、静音段；编号随文件稳定 | `inventory.csv` |
 | **2&nbsp;抽帧打分**<br><sub>`frames.py`</sub> | 每 8 秒抽关键帧，判糊、判曝光，拼联系表 | `frames.csv` `contact/` |
-| **3&nbsp;看懂素材**<br><sub>MiMo · `understand.py`</sub> | 拼成 720p 代理长片只跑一次：场景描述 + 语音转写，再拆回每段；逐张缩略图判方向 | `clip_understanding.json` |
+| **3&nbsp;看懂素材**<br><sub>Claude · `transcribe.py` · `orient.py`</sub> | Claude 看联系表理解画面、判方向；本地 Whisper 转写语音，不额外收费 | `speech.json`、`orientation.json` |
 | **4&nbsp;写故事**<br><sub>Claude</sub> | 钩子 / 铺垫 / 转折 / 高潮 / 收尾；剔除无关素材；可选平行蒙太奇 | `story_plan.json` |
 | **5&nbsp;分镜**<br><sub>`plan.py`</sub> | 只留关键片段并列出删除清单，按长短节奏挑镜头，避坏帧、吸附静音；先 dry-run | `shots.csv` |
 | **5.5&nbsp;卡点**<br><sub>`beatsync.py`</sub> | 可选：切点吸附拍点，章节交界落在小节线，可把高潮对到音乐高能段 | `shots.csv`、`bgm_plan.json` |
 | **6&nbsp;生成草稿**<br><sub>`build.py`</sub> | 主视频轨 + 章节标题 + BGM，写完读回自检 | 剪映草稿 |
 | **7&nbsp;精修导出**<br><sub>你</sub> | 剪映里调色、转场、字幕、导出成片 | 成片 |
 
-没有 MiMo key（或余额不足）时会**提醒你充值**；也可以加 `--no-understanding` 走降级路径：Claude 直接看 `contact/` 联系表写故事。
+也可以选用小米 MiMo（`understand.py`，按量计费）：它会生成场景描述并转写语音；余额不足时会**提醒你充值**。
 
 ## 支持的功能
 
@@ -55,8 +55,8 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 |---|---|---|
 | 素材盘点、按拍摄时间排序 | ✅ | ffprobe；没有 ffprobe 时退回 pymediainfo |
 | 糊片 / 过暗 / 过曝识别 | ✅ | 拉普拉斯方差与本段中位数比较，室内、雾天不会被整段误杀 |
-| 画面方向检测 | ✅ | MiMo 逐帧判断：整段倒装的转 180°；挂着晃拍、大半歪倒的整段弃用；个别歪帧避开 |
-| 按场景理解素材 | ✅ | 每段素材的场景描述 + 语音转写（MiMo VLM / ASR） |
+| 画面方向检测 | ✅ | Claude 看联系表判断（或用 MiMo）：整段倒装的转 180°；挂着晃拍、大半歪倒的整段弃用；个别歪帧避开 |
+| 理解素材 | ✅ | Claude 看画面 + 本地 Whisper 转写语音；可选 MiMo 场景描述 |
 | 梳理故事线 | ✅ | 钩子冷开场、铺垫、转折、高潮、收尾；必须出现的瞬间（pin）一定入选 |
 | 剔除无关素材 | ✅ | `story.py --exclude c001-c010,…` |
 | 平行蒙太奇 | ✅ | 章节里两条线（如「我们俩」×「爸妈」）交替剪，落在指定的那条线 |
@@ -74,7 +74,7 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 **输入**
 
 - 素材目录：`.mp4` `.mov` `.m4v` `.mkv` `.avi` `.mts` `.m2ts` `.mxf`（子目录会递归扫描）
-- 一句话背景（帮 MiMo 理解）；想要固定时长时再给目标时长（如 `5:00`）
+- 一句话背景（帮助理解素材，也减少转写的同音字错误）；想要固定时长时再给目标时长（如 `5:00`）
 - BGM（可选）：本地 `.mp3` / `.flac` / `.m4a`（网易云 `.ncm` 是加密格式，不能用）
 
 **输出**：剪映专业版草稿，位于剪映「全局设置 → 草稿位置」（默认 `~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft/<草稿名>/`）
@@ -96,7 +96,8 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | 剪映专业版 11.6（VideoFusion-macOS） | 版本号每次从本机读取，剪映升级后无需改代码，但建议升级后重跑一次自检 |
 | Python ≥ 3.10 + [uv](https://docs.astral.sh/uv/) | 每个脚本头部写了依赖（PEP 723），`uv run --script` 首次运行自动安装：numpy、pillow、pymediainfo、pyJianYingDraft（锁定提交 `69cee12`） |
 | ffmpeg / ffprobe | 推荐 `brew install ffmpeg`（需要 `h264_videotoolbox`、`silencedetect`） |
-| 小米 MiMo API key（可选） | `export MIMO_API_KEY=…`；用于看懂素材和方向检测。默认看图模型 `mimo-v2.6-flash`，可用 `MIMO_MODEL` 覆盖 |
+| 磁盘空间约 500MB | 本地 Whisper small 模型，首次转写时自动下载 |
+| 小米 MiMo API key（可选） | `export MIMO_API_KEY=…`；只有选用 `understand.py` 时才需要。默认看图模型 `mimo-v2.6-flash`，可用 `MIMO_MODEL` 覆盖 |
 | Claude Code（或其他能读 Agent Skills 的编程 Agent） | 负责编排各步、写故事脚本 |
 
 ## 安装与使用
@@ -134,9 +135,11 @@ skills CLI 只复制 `skills/jianying-autocut/` 这一个文件夹（技能说�
 ```bash
 uv run --script $S/probe.py ~/Videos/my-trip
 uv run --script $S/frames.py --work $W
-uv run --script $S/understand.py --work $W --context "两天徒步"     # 或 --no-understanding
-# Claude 写 $W/recap_story_plan.json（格式见 skills/jianying-autocut/references/story_plan.md）
-uv run --script $S/story.py --work $W --from-recap --exclude c001-c010
+uv run --script $S/transcribe.py --work $W --context "两天徒步"
+# Claude 看 $W/contact/ 联系表，判断方向
+uv run --script $S/orient.py --work $W --flip c012 --bad c005@12
+# Claude 写 $W/story_plan.json（格式见 skills/jianying-autocut/references/story_plan.md）
+uv run --script $S/story.py --work $W --check --exclude c001-c010
 uv run --script $S/plan.py --work $W --dry-run     # 要固定时长就加 --target 5:00
 uv run --script $S/plan.py --work $W
 # ⌘Q 完全退出剪映
@@ -150,8 +153,9 @@ uv run --script $S/build.py --work $W --name 我的旅行粗剪 --titles --bgm ~
 - **剪映打开后草稿会被加密，本项目读不回来。** 你在剪映里做的修改，脚本看不到也接不上；重新生成会整目录覆盖同名草稿，想保留手工修改要先在剪映里另存副本。要基于剪好的版本继续处理，只能等你从剪映导出成片，再把成片当素材交给流程。
 - **写草稿时剪映必须完全退出**（⌘Q），否则剪映退出时会覆盖草稿。
 - 只支持 macOS + 剪映专业版；CapCut 未测试。
-- 看懂素材依赖小米 MiMo（按量计费）：每次理解把所有素材拼成一条代理长片只跑一次；没有 MiMo 时只能走联系表降级。
-- MiMo 语音转写按 15 秒窗口粗切，没有句子边界；切点只能吸附到静音处，对着镜头说话的片段偶尔会切在半句。
+- Claude 看的是联系表（默认每 8 秒一帧），两帧之间的动作看不到；可以用 `frames.py --every 4` 抽得更密。
+- Claude 听不到声音：语音靠 Whisper 转写，环境声和音乐的情绪都听不出来。
+- 切点只吸附到静音处，对着镜头说话的片段偶尔会切在半句。
 - 画面方向按 8 秒一帧抽样判断，抽样之间的画面可能漏判。
 - 多台设备混拍时，若设备时钟没对齐，按拍摄时间的排序会乱；请先自行校正拍摄时间。
 - 章节素材很碎时（全是短镜头），节奏调整也避免不了三连短镜头。
@@ -162,7 +166,7 @@ uv run --script $S/build.py --work $W --name 我的旅行粗剪 --titles --bgm ~
 ```text
 skills/jianying-autocut/                技能本体（npx skills / 插件安装的就是这个文件夹）
   SKILL.md                              给 Agent 的使用说明（技能入口）
-  scripts/                              probe · frames · understand · story · plan · build · common
+  scripts/                              probe · frames · transcribe · orient · understand · story · plan · beatsync · build · common
   references/                           写故事指引（story_plan.md）、实测踩坑（pitfalls.md）
   vendor/video-understanding/           收录的素材理解模块（MIT，见下方鸣谢）
   vendor/video-script-refs/             video-script 的导演方法文档（MIT）

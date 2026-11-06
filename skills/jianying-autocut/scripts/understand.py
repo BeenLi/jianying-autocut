@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""第 3 步 内容理解：代理长片 → video-understanding（MiMo）→ 拆回每段素材
+"""第 3 步（可选，默认流程用 transcribe.py + Claude 看联系表）内容理解：代理长片 → video-understanding（MiMo）→ 拆回每段素材
 
 用法: uv run --script understand.py --work <目录> [--context "庐山两日徒步"] [--no-understanding]
 
@@ -322,7 +322,7 @@ def main():
     args = ap.parse_args()
 
     if args.no_understanding:
-        print("降级模式：不调 MiMo。请看 contact/ 联系表，按 references/story_plan.md 直接写 story_plan.json")
+        print("不调 MiMo。请看 contact/ 联系表，按 references/story_plan.md 直接写 story_plan.json")
         return
     if not os.path.exists(UNDERSTAND_CLI):
         sys.exit(f"没找到 video-understanding（{UNDERSTAND_CLI}）；可加 --no-understanding 降级")

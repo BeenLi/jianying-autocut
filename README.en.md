@@ -40,14 +40,14 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | **0&nbsp;Request**<br><sub>you</sub> | Footage folder, one-line background, BGM or not | — |
 | **1&nbsp;Inventory**<br><sub>`probe.py`</sub> | Duration, resolution, capture time, silent stretches; clip IDs stay stable per file | `inventory.csv` |
 | **2&nbsp;Frame scoring**<br><sub>`frames.py`</sub> | Key frame every 8 s, blur and exposure checks, contact sheets | `frames.csv` `contact/` |
-| **3&nbsp;Understand footage**<br><sub>MiMo · `understand.py`</sub> | Joins everything into one 720p proxy and runs once: scene descriptions + speech transcription, then splits back per clip; per-thumbnail orientation check | `clip_understanding.json` |
+| **3&nbsp;Understand footage**<br><sub>Claude · `transcribe.py` · `orient.py`</sub> | Claude reads the contact sheets for picture content and orientation; local Whisper transcribes speech at no extra charge | `speech.json`, `orientation.json` |
 | **4&nbsp;Write the story**<br><sub>Claude</sub> | Hook / setup / turn / climax / ending; drops unrelated footage; optional parallel montage | `story_plan.json` |
 | **5&nbsp;Shot plan**<br><sub>`plan.py`</sub> | Keeps only key segments and lists what it drops, picks shots with a long/short rhythm, avoids bad frames, snaps to silence; dry-run first | `shots.csv` |
 | **5.5&nbsp;Beat sync**<br><sub>`beatsync.py`</sub> | Optional: snaps cuts to beats and chapter changes to bars, can align the climax with a high-energy section of the song | `shots.csv`, `bgm_plan.json` |
 | **6&nbsp;Build draft**<br><sub>`build.py`</sub> | Main video track + chapter titles + BGM, read back and self-checked after writing | JianYing draft |
 | **7&nbsp;Polish and export**<br><sub>you</sub> | Color, transitions, subtitles and export in JianYing | Final video |
 
-Without a MiMo key (or with too little balance) it **reminds you to top up**; you can also pass `--no-understanding` for the fallback path, where Claude writes the story straight from the `contact/` sheets.
+You can also opt in to Xiaomi MiMo (`understand.py`, pay per use), which writes scene descriptions and transcribes speech; with too little balance it **reminds you to top up**.
 
 ## Features
 
@@ -55,8 +55,8 @@ Without a MiMo key (or with too little balance) it **reminds you to top up**; yo
 |---|---|---|
 | Inventory footage, sort by capture time | ✅ | ffprobe; falls back to pymediainfo without it |
 | Detect blurry / too dark / overexposed frames | ✅ | Laplacian variance compared with the clip's own median, so indoor or foggy clips are not thrown out wholesale |
-| Orientation detection | ✅ | MiMo checks frame by frame: clips upside down throughout are rotated 180°; dangling, shaky or mostly tilted clips are dropped; the odd tilted frame is avoided |
-| Scene-level footage understanding | ✅ | Scene description + speech transcript for every clip (MiMo VLM / ASR) |
+| Orientation detection | ✅ | Claude checks the contact sheets (or MiMo, if chosen): clips upside down throughout are rotated 180°; dangling, shaky or mostly tilted clips are dropped; the odd tilted frame is avoided |
+| Footage understanding | ✅ | Claude reads the pictures + local Whisper transcribes speech; optional MiMo scene descriptions |
 | Story structure | ✅ | Cold-open hook, setup, turn, climax, ending; must-have moments (pins) are always included |
 | Drop unrelated footage | ✅ | `story.py --exclude c001-c010,…` |
 | Parallel montage | ✅ | Two threads in one chapter (e.g. "the two of us" × "our parents") cut alternately, ending on the thread you choose |
@@ -74,7 +74,7 @@ Without a MiMo key (or with too little balance) it **reminds you to top up**; yo
 **Input**
 
 - Footage folder: `.mp4` `.mov` `.m4v` `.mkv` `.avi` `.mts` `.m2ts` `.mxf` (subfolders are scanned recursively)
-- A one-line background (helps MiMo understand the footage); a target length (e.g. `5:00`) only if you want a fixed one
+- A one-line background (helps with understanding the footage and reduces transcription errors); a target length (e.g. `5:00`) only if you want a fixed one
 - BGM (optional): local `.mp3` / `.flac` / `.m4a` (NetEase Cloud Music `.ncm` files are encrypted and cannot be used)
 
 **Output**: a JianYing Pro draft in JianYing's "Global settings → Draft location" (default `~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft/<draft name>/`)
@@ -96,7 +96,8 @@ All intermediate files live in `<footage folder>/_autocut/`, and every step can 
 | JianYing Pro 11.6 (VideoFusion-macOS) | The version number is read from the local install each time, so JianYing upgrades need no code changes, but rerun the self-check after upgrading |
 | Python ≥ 3.10 + [uv](https://docs.astral.sh/uv/) | Each script declares its dependencies in its header (PEP 723) and `uv run --script` installs them on first run: numpy, pillow, pymediainfo, pyJianYingDraft (pinned at commit `69cee12`) |
 | ffmpeg / ffprobe | `brew install ffmpeg` recommended (needs `h264_videotoolbox` and `silencedetect`) |
-| Xiaomi MiMo API key (optional) | `export MIMO_API_KEY=…`; used for footage understanding and orientation detection. Default vision model `mimo-v2.6-flash`, override with `MIMO_MODEL` |
+| About 500 MB of disk space | Local Whisper small model, downloaded on the first transcription |
+| Xiaomi MiMo API key (optional) | `export MIMO_API_KEY=…`; needed only if you choose `understand.py`. Default vision model `mimo-v2.6-flash`, override with `MIMO_MODEL` |
 | Claude Code (or another coding agent that reads Agent Skills) | Orchestrates the steps and writes the story script |
 
 ## Install and use
@@ -134,9 +135,11 @@ You can also run the steps by hand (`S=~/.claude/skills/jianying-autocut/scripts
 ```bash
 uv run --script $S/probe.py ~/Videos/my-trip
 uv run --script $S/frames.py --work $W
-uv run --script $S/understand.py --work $W --context "two-day hike"     # or --no-understanding
-# Claude writes $W/recap_story_plan.json (format in skills/jianying-autocut/references/story_plan.md)
-uv run --script $S/story.py --work $W --from-recap --exclude c001-c010
+uv run --script $S/transcribe.py --work $W --context "two-day hike" --language en     # default is zh; auto also works
+# Claude reads the $W/contact/ sheets and checks orientation
+uv run --script $S/orient.py --work $W --flip c012 --bad c005@12
+# Claude writes $W/story_plan.json (format in skills/jianying-autocut/references/story_plan.md)
+uv run --script $S/story.py --work $W --check --exclude c001-c010
 uv run --script $S/plan.py --work $W --dry-run     # add --target 5:00 for a fixed length
 uv run --script $S/plan.py --work $W
 # Fully quit JianYing with ⌘Q
@@ -150,8 +153,9 @@ Run the tests: `./run_tests.sh`
 - **Once JianYing opens a draft it encrypts it, and this project cannot read it back.** The scripts can't see or build on edits you make in JianYing; rebuilding overwrites the draft folder of the same name, so save a copy in JianYing first if you want to keep manual edits. To keep working from an edited version, export the video from JianYing and feed it back in as footage.
 - **JianYing must be fully quit (⌘Q) while the draft is written**, or it overwrites the draft when it exits.
 - macOS + JianYing Pro only; CapCut is untested.
-- Footage understanding relies on Xiaomi MiMo (pay per use): each run joins all footage into one proxy and runs once; without MiMo only the contact-sheet fallback is available.
-- MiMo transcription is cut into rough 15-second windows without sentence boundaries; cut points can only snap to silence, so talking-to-camera clips are occasionally cut mid-sentence.
+- Claude reads contact sheets (one frame every 8 seconds by default), so it misses action between frames; `frames.py --every 4` samples more densely.
+- Claude cannot hear: speech comes from Whisper, and it cannot judge ambient sound or the mood of music.
+- Cut points only snap to silence, so talking-to-camera clips are occasionally cut mid-sentence.
 - Orientation is sampled one frame every 8 seconds, so frames between samples can be missed.
 - When several devices were used and their clocks weren't in sync, sorting by capture time goes wrong; fix capture times yourself first.
 - When a chapter's footage is very fragmented (all short shots), rhythm adjustment can't avoid three short shots in a row.
@@ -162,7 +166,7 @@ Run the tests: `./run_tests.sh`
 ```text
 skills/jianying-autocut/                The skill itself (what npx skills / the plugin installs)
   SKILL.md                              Instructions for the agent (skill entry point)
-  scripts/                              probe · frames · understand · story · plan · build · common
+  scripts/                              probe · frames · transcribe · orient · understand · story · plan · beatsync · build · common
   references/                           Story-writing guide (story_plan.md), field-tested pitfalls (pitfalls.md)
   vendor/video-understanding/           Vendored footage-understanding module (MIT, see Acknowledgements)
   vendor/video-script-refs/             Directing method docs from video-script (MIT)
