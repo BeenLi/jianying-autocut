@@ -10,7 +10,7 @@
     {
       "name": "jianying-autocut",
       "source": "./",
-      "description": "Understand footage with Xiaomi MiMo, write a story plan (hook / build-up / turn / climax / ending), pick shots by chapter quota and pacing, and generate a JianYing draft with chapter titles and BGM.",
+      "description": "Understand footage with Claude and local Whisper, write a story plan (hook / build-up / turn / climax / ending), pick shots by chapter quota and pacing, and generate a JianYing draft with chapter titles and BGM.",
       "strict": false
     }
   ]

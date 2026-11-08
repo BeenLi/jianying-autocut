@@ -11,7 +11,6 @@
   <img alt="macOS" src="https://img.shields.io/badge/macOS-only-111111?style=flat-square&logo=apple&logoColor=white">
   <img alt="剪映专业版 11.6" src="https://img.shields.io/badge/%E5%89%AA%E6%98%A0%E4%B8%93%E4%B8%9A%E7%89%88-11.6-081431?style=flat-square">
   <a href="https://www.python.org/"><img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white"></a>
-  <a href="https://platform.xiaomimimo.com"><img alt="AI Xiaomi MiMo" src="https://img.shields.io/badge/AI-Xiaomi%20MiMo-34A853?style=flat-square"></a>
   <img alt="Claude Code skill" src="https://img.shields.io/badge/Claude%20Code-skill-bf4520?style=flat-square">
   <a href="https://github.com/BeenLi/jianying-autocut/actions/workflows/test.yml"><img alt="test" src="https://img.shields.io/github/actions/workflow/status/BeenLi/jianying-autocut/test.yml?branch=main&style=flat-square&label=test"></a>
   <a href="./LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/License-MIT-1F6FEB?style=flat-square"></a>
@@ -40,14 +39,13 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | **0&nbsp;提需求**<br><sub>你</sub> | 素材目录、一句话背景、要不要 BGM | — |
 | **1&nbsp;盘点**<br><sub>`probe.py`</sub> | 时长、分辨率、拍摄时间、静音段；编号随文件稳定 | `inventory.csv` |
 | **2&nbsp;抽帧打分**<br><sub>`frames.py`</sub> | 每 8 秒抽关键帧，判糊、判曝光，拼联系表 | `frames.csv` `contact/` |
-| **3&nbsp;看懂素材**<br><sub>Claude · `transcribe.py` · `orient.py`</sub> | Claude 看联系表理解画面、判方向；本地 Whisper 转写语音，不额外收费 | `speech.json`、`orientation.json` |
+| **3&nbsp;看懂素材**<br><sub>Claude · `transcribe.py` · `notes.py` · `orient.py`</sub> | Claude 看联系表写场景描述、判方向；本地 Whisper 转写语音，不额外收费 | `footage_brief.md`、`orientation.json` |
 | **4&nbsp;写故事**<br><sub>Claude</sub> | 钩子 / 铺垫 / 转折 / 高潮 / 收尾；剔除无关素材；可选平行蒙太奇 | `story_plan.json` |
 | **5&nbsp;分镜**<br><sub>`plan.py`</sub> | 只留关键片段并列出删除清单，按长短节奏挑镜头，避坏帧、吸附静音；先 dry-run | `shots.csv` |
 | **5.5&nbsp;卡点**<br><sub>`beatsync.py`</sub> | 可选：切点吸附拍点，章节交界落在小节线，可把高潮对到音乐高能段 | `shots.csv`、`bgm_plan.json` |
 | **6&nbsp;生成草稿**<br><sub>`build.py`</sub> | 主视频轨 + 章节标题 + BGM，写完读回自检 | 剪映草稿 |
 | **7&nbsp;精修导出**<br><sub>你</sub> | 剪映里调色、转场、字幕、导出成片 | 成片 |
 
-也可以选用小米 MiMo（`understand.py`，按量计费）：它会生成场景描述并转写语音；余额不足时会**提醒你充值**。
 
 ## 支持的功能
 
@@ -55,8 +53,8 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 |---|---|---|
 | 素材盘点、按拍摄时间排序 | ✅ | ffprobe；没有 ffprobe 时退回 pymediainfo |
 | 糊片 / 过暗 / 过曝识别 | ✅ | 拉普拉斯方差与本段中位数比较，室内、雾天不会被整段误杀 |
-| 画面方向检测 | ✅ | Claude 看联系表判断（或用 MiMo）：整段倒装的转 180°；挂着晃拍、大半歪倒的整段弃用；个别歪帧避开 |
-| 理解素材 | ✅ | Claude 看画面 + 本地 Whisper 转写语音；可选 MiMo 场景描述 |
+| 画面方向检测 | ✅ | Claude 看联系表判断：整段倒装的转 180°；挂着晃拍、大半歪倒的整段弃用；个别歪帧避开 |
+| 理解素材 | ✅ | 按固定间隔和画面切换抽帧，Claude 写场景描述，本地 Whisper 转写语音 |
 | 梳理故事线 | ✅ | 钩子冷开场、铺垫、转折、高潮、收尾；必须出现的瞬间（pin）一定入选 |
 | 剔除无关素材 | ✅ | `story.py --exclude c001-c010,…` |
 | 平行蒙太奇 | ✅ | 章节里两条线（如「我们俩」×「爸妈」）交替剪，落在指定的那条线 |
@@ -97,7 +95,6 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | Python ≥ 3.10 + [uv](https://docs.astral.sh/uv/) | 每个脚本头部写了依赖（PEP 723），`uv run --script` 首次运行自动安装：numpy、pillow、pymediainfo、pyJianYingDraft（锁定提交 `69cee12`） |
 | ffmpeg / ffprobe | 推荐 `brew install ffmpeg`（需要 `h264_videotoolbox`、`silencedetect`） |
 | 磁盘空间约 500MB | 本地 Whisper small 模型，首次转写时自动下载 |
-| 小米 MiMo API key（可选） | `export MIMO_API_KEY=…`；只有选用 `understand.py` 时才需要。默认看图模型 `mimo-v2.6-flash`，可用 `MIMO_MODEL` 覆盖 |
 | Claude Code（或其他能读 Agent Skills 的编程 Agent） | 负责编排各步、写故事脚本 |
 
 ## 安装与使用
@@ -136,7 +133,8 @@ skills CLI 只复制 `skills/jianying-autocut/` 这一个文件夹（技能说�
 uv run --script $S/probe.py ~/Videos/my-trip
 uv run --script $S/frames.py --work $W
 uv run --script $S/transcribe.py --work $W --context "两天徒步"
-# Claude 看 $W/contact/ 联系表，判断方向
+# Claude 看 $W/contact/ 联系表，写 $W/scene_notes.json，判断方向
+uv run --script $S/notes.py --work $W
 uv run --script $S/orient.py --work $W --flip c012 --bad c005@12
 # Claude 写 $W/story_plan.json（格式见 skills/jianying-autocut/references/story_plan.md）
 uv run --script $S/story.py --work $W --check --exclude c001-c010
@@ -166,9 +164,9 @@ uv run --script $S/build.py --work $W --name 我的旅行粗剪 --titles --bgm ~
 ```text
 skills/jianying-autocut/                技能本体（npx skills / 插件安装的就是这个文件夹）
   SKILL.md                              给 Agent 的使用说明（技能入口）
-  scripts/                              probe · frames · transcribe · orient · understand · story · plan · beatsync · build · common
+  scripts/                              probe · frames · transcribe · notes · orient · story · plan · beatsync · build · common
   references/                           写故事指引（story_plan.md）、实测踩坑（pitfalls.md）
-  vendor/video-understanding/           收录的素材理解模块（MIT，见下方鸣谢）
+  vendor/video-script-refs/             收录的导演方法文档（MIT，见下方鸣谢）
   vendor/video-script-refs/             video-script 的导演方法文档（MIT）
 .claude-plugin/marketplace.json         Claude Code 插件清单
 tests/                                  pytest（./run_tests.sh）
@@ -179,9 +177,9 @@ docs/                                   设计规格、实现计划、工作流�
 
 - **[GuanYixuan/pyJianYingDraft](https://github.com/GuanYixuan/pyJianYingDraft)**（Apache-2.0）：Python 剪映草稿生成库，本项目写草稿的基础。
 - **[aoguai/pyJianYingDraft](https://github.com/aoguai/pyJianYingDraft)**（Apache-2.0）：维护版，支持剪映 7+ / 11.6 的新草稿格式；本项目锁定使用其提交 `69cee12`。
-- **[zenstory-ai/video-recap-skills](https://github.com/zenstory-ai/video-recap-skills)**（MIT, © 2026 PiteChen）：本项目收录了其中的 `video-understanding`（场景、ASR、VLM、理解简报），并沿用 `video-script` 的故事脚本格式与导演方法。许可证原文见 [`vendor/LICENSE-video-recap-skills`](skills/jianying-autocut/vendor/LICENSE-video-recap-skills)。
+- **[zenstory-ai/video-recap-skills](https://github.com/zenstory-ai/video-recap-skills)**（MIT, © 2026 PiteChen）：本项目收录了 `video-script` 的导演方法文档。许可证原文见 [`vendor/LICENSE-video-recap-skills`](skills/jianying-autocut/vendor/LICENSE-video-recap-skills)。
 - **[cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design)**（MIT）：工作流图用它的设计系统绘制。
-- **[小米 MiMo](https://platform.xiaomimimo.com)**：素材理解所用的 VLM / ASR 模型。
+- **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)**（MIT）：本地语音转写。
 - 网络教程《剪映自动化粗剪 · 即抄提示词（适配剪映 11.6）》：版本号对齐、素材零复制等踩坑经验的来源。
 
 ## 许可证

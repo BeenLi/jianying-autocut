@@ -19,4 +19,4 @@ jobs:
           C="$T/.claude/skills/jianying-autocut"
           test -f "$C/SKILL.md"
           uv run -q --script "$C/scripts/probe.py" --help
-          python3 -I -c "import os, sys; sys.path.insert(0, '$C/scripts'); import common; assert os.path.exists(common.UNDERSTAND_CLI), common.UNDERSTAND_CLI"
+          test -f "$C/vendor/video-script-refs/creative-editing-playbook.md"

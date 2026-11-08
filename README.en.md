@@ -11,7 +11,6 @@
   <img alt="macOS" src="https://img.shields.io/badge/macOS-only-111111?style=flat-square&logo=apple&logoColor=white">
   <img alt="JianYing Pro 11.6" src="https://img.shields.io/badge/JianYing%20Pro-11.6-081431?style=flat-square">
   <a href="https://www.python.org/"><img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white"></a>
-  <a href="https://platform.xiaomimimo.com"><img alt="AI Xiaomi MiMo" src="https://img.shields.io/badge/AI-Xiaomi%20MiMo-34A853?style=flat-square"></a>
   <img alt="Claude Code skill" src="https://img.shields.io/badge/Claude%20Code-skill-bf4520?style=flat-square">
   <a href="https://github.com/BeenLi/jianying-autocut/actions/workflows/test.yml"><img alt="test" src="https://img.shields.io/github/actions/workflow/status/BeenLi/jianying-autocut/test.yml?branch=main&style=flat-square&label=test"></a>
   <a href="./LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/License-MIT-1F6FEB?style=flat-square"></a>
@@ -40,14 +39,13 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | **0&nbsp;Request**<br><sub>you</sub> | Footage folder, one-line background, BGM or not | — |
 | **1&nbsp;Inventory**<br><sub>`probe.py`</sub> | Duration, resolution, capture time, silent stretches; clip IDs stay stable per file | `inventory.csv` |
 | **2&nbsp;Frame scoring**<br><sub>`frames.py`</sub> | Key frame every 8 s, blur and exposure checks, contact sheets | `frames.csv` `contact/` |
-| **3&nbsp;Understand footage**<br><sub>Claude · `transcribe.py` · `orient.py`</sub> | Claude reads the contact sheets for picture content and orientation; local Whisper transcribes speech at no extra charge | `speech.json`, `orientation.json` |
+| **3&nbsp;Understand footage**<br><sub>Claude · `transcribe.py` · `notes.py` · `orient.py`</sub> | Claude reads the contact sheets to write scene notes and check orientation; local Whisper transcribes speech at no extra charge | `footage_brief.md`, `orientation.json` |
 | **4&nbsp;Write the story**<br><sub>Claude</sub> | Hook / setup / turn / climax / ending; drops unrelated footage; optional parallel montage | `story_plan.json` |
 | **5&nbsp;Shot plan**<br><sub>`plan.py`</sub> | Keeps only key segments and lists what it drops, picks shots with a long/short rhythm, avoids bad frames, snaps to silence; dry-run first | `shots.csv` |
 | **5.5&nbsp;Beat sync**<br><sub>`beatsync.py`</sub> | Optional: snaps cuts to beats and chapter changes to bars, can align the climax with a high-energy section of the song | `shots.csv`, `bgm_plan.json` |
 | **6&nbsp;Build draft**<br><sub>`build.py`</sub> | Main video track + chapter titles + BGM, read back and self-checked after writing | JianYing draft |
 | **7&nbsp;Polish and export**<br><sub>you</sub> | Color, transitions, subtitles and export in JianYing | Final video |
 
-You can also opt in to Xiaomi MiMo (`understand.py`, pay per use), which writes scene descriptions and transcribes speech; with too little balance it **reminds you to top up**.
 
 ## Features
 
@@ -55,8 +53,8 @@ You can also opt in to Xiaomi MiMo (`understand.py`, pay per use), which writes 
 |---|---|---|
 | Inventory footage, sort by capture time | ✅ | ffprobe; falls back to pymediainfo without it |
 | Detect blurry / too dark / overexposed frames | ✅ | Laplacian variance compared with the clip's own median, so indoor or foggy clips are not thrown out wholesale |
-| Orientation detection | ✅ | Claude checks the contact sheets (or MiMo, if chosen): clips upside down throughout are rotated 180°; dangling, shaky or mostly tilted clips are dropped; the odd tilted frame is avoided |
-| Footage understanding | ✅ | Claude reads the pictures + local Whisper transcribes speech; optional MiMo scene descriptions |
+| Orientation detection | ✅ | Claude checks the contact sheets: clips upside down throughout are rotated 180°; dangling, shaky or mostly tilted clips are dropped; the odd tilted frame is avoided |
+| Footage understanding | ✅ | Frames sampled at fixed intervals and at scene changes, scene notes by Claude, speech transcribed by local Whisper |
 | Story structure | ✅ | Cold-open hook, setup, turn, climax, ending; must-have moments (pins) are always included |
 | Drop unrelated footage | ✅ | `story.py --exclude c001-c010,…` |
 | Parallel montage | ✅ | Two threads in one chapter (e.g. "the two of us" × "our parents") cut alternately, ending on the thread you choose |
@@ -97,7 +95,6 @@ All intermediate files live in `<footage folder>/_autocut/`, and every step can 
 | Python ≥ 3.10 + [uv](https://docs.astral.sh/uv/) | Each script declares its dependencies in its header (PEP 723) and `uv run --script` installs them on first run: numpy, pillow, pymediainfo, pyJianYingDraft (pinned at commit `69cee12`) |
 | ffmpeg / ffprobe | `brew install ffmpeg` recommended (needs `h264_videotoolbox` and `silencedetect`) |
 | About 500 MB of disk space | Local Whisper small model, downloaded on the first transcription |
-| Xiaomi MiMo API key (optional) | `export MIMO_API_KEY=…`; needed only if you choose `understand.py`. Default vision model `mimo-v2.6-flash`, override with `MIMO_MODEL` |
 | Claude Code (or another coding agent that reads Agent Skills) | Orchestrates the steps and writes the story script |
 
 ## Install and use
@@ -136,7 +133,8 @@ You can also run the steps by hand (`S=~/.claude/skills/jianying-autocut/scripts
 uv run --script $S/probe.py ~/Videos/my-trip
 uv run --script $S/frames.py --work $W
 uv run --script $S/transcribe.py --work $W --context "two-day hike" --language en     # default is zh; auto also works
-# Claude reads the $W/contact/ sheets and checks orientation
+# Claude reads the $W/contact/ sheets, writes $W/scene_notes.json, and checks orientation
+uv run --script $S/notes.py --work $W
 uv run --script $S/orient.py --work $W --flip c012 --bad c005@12
 # Claude writes $W/story_plan.json (format in skills/jianying-autocut/references/story_plan.md)
 uv run --script $S/story.py --work $W --check --exclude c001-c010
@@ -166,9 +164,9 @@ Run the tests: `./run_tests.sh`
 ```text
 skills/jianying-autocut/                The skill itself (what npx skills / the plugin installs)
   SKILL.md                              Instructions for the agent (skill entry point)
-  scripts/                              probe · frames · transcribe · orient · understand · story · plan · beatsync · build · common
+  scripts/                              probe · frames · transcribe · notes · orient · story · plan · beatsync · build · common
   references/                           Story-writing guide (story_plan.md), field-tested pitfalls (pitfalls.md)
-  vendor/video-understanding/           Vendored footage-understanding module (MIT, see Acknowledgements)
+  vendor/video-script-refs/             Vendored directing-method document (MIT, see Acknowledgements)
   vendor/video-script-refs/             Directing method docs from video-script (MIT)
 .claude-plugin/marketplace.json         Claude Code plugin manifest
 tests/                                  pytest (./run_tests.sh)
@@ -181,9 +179,9 @@ Skill instructions and docs are written in Chinese.
 
 - **[GuanYixuan/pyJianYingDraft](https://github.com/GuanYixuan/pyJianYingDraft)** (Apache-2.0): Python library for generating JianYing drafts, the foundation for writing drafts here.
 - **[aoguai/pyJianYingDraft](https://github.com/aoguai/pyJianYingDraft)** (Apache-2.0): maintained fork supporting the new draft format of JianYing 7+ / 11.6; this project pins its commit `69cee12`.
-- **[zenstory-ai/video-recap-skills](https://github.com/zenstory-ai/video-recap-skills)** (MIT, © 2026 PiteChen): this project vendors its `video-understanding` (scenes, ASR, VLM, understanding brief) and follows the story-script format and directing method of `video-script`. License text in [`vendor/LICENSE-video-recap-skills`](skills/jianying-autocut/vendor/LICENSE-video-recap-skills).
+- **[zenstory-ai/video-recap-skills](https://github.com/zenstory-ai/video-recap-skills)** (MIT, © 2026 PiteChen): this project vendors the directing-method document from `video-script`. License text in [`vendor/LICENSE-video-recap-skills`](skills/jianying-autocut/vendor/LICENSE-video-recap-skills).
 - **[cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design)** (MIT): the workflow diagram uses its design system.
-- **[Xiaomi MiMo](https://platform.xiaomimimo.com)**: the VLM / ASR models used for footage understanding.
+- **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (MIT): local speech transcription.
 - The online tutorial 《剪映自动化粗剪 · 即抄提示词（适配剪映 11.6）》 (JianYing automated rough cut, copy-paste prompts for 11.6): source of lessons on version alignment, zero-copy footage and other pitfalls.
 
 ## License

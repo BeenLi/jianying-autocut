@@ -1,7 +1,7 @@
 ---
 name: jianying-autocut
 description: >
-  把一堆 vlog / 旅行素材自动粗剪成剪映专业版（11.6，macOS）能直接打开的草稿：先由 Claude 看联系表、本地 Whisper 转写语音来理解全部素材（也可选 MiMo），
+  把一堆 vlog / 旅行素材自动粗剪成剪映专业版（11.6，macOS）能直接打开的草稿：先由 Claude 看联系表、本地 Whisper 转写语音来理解全部素材，
   再按 video-script 的导演方法（见 vendor/video-script-refs/）写故事脚本（钩子/铺垫/转折/高潮/收尾），然后只保留关键片段、删掉多余素材，
   按长短镜头节奏自动挑镜头、判糊避坏帧（成片时长由留下的片段决定，也可指定），最后生成带章节标题和 BGM 的剪映草稿。
   触发词：自动粗剪、vlog 粗剪、按故事剪、素材太多帮我剪、旅行素材剪一版、剪映自动化、autocut、
@@ -32,8 +32,8 @@ description: >
 |---|---|---|
 | 0 提需求 | 问用户，见上 | — |
 | 1 盘点 | `probe.py <素材目录>` | `inventory.csv`（clip_id、时长、分辨率）、`silences.json` |
-| 2 抽帧打分 | `frames.py --work W`（默认每 8 秒一帧） | `frames.csv`（判糊 / 曝光）、`contact/sheet_*.jpg` 联系表 |
-| 3 看懂素材 | `transcribe.py --work W --context "<背景>"`（后台跑）→ **你看联系表**，见下 → `orient.py --work W ...` | `speech.json`（语音转写）、`orientation.json`（画面方向） |
+| 2 抽帧打分 | `frames.py --work W`（每 8 秒一帧 + 画面切换处） | `frames.csv`（判糊 / 曝光）、`contact/sheet_*.jpg` 联系表 |
+| 3 看懂素材 | `transcribe.py --work W --context "<背景>"`（后台跑）→ **你看联系表写描述**，见下 → `notes.py --work W` → `orient.py --work W ...` | `speech.json`、`scene_notes.json`、`footage_brief.md`、`orientation.json` |
 | 4 写故事 | **你来写**，见下 | `story_plan.json` |
 | 5 分镜 | `plan.py --work W --dry-run` → 给用户看 → 去掉 `--dry-run`（用户指定了时长才加 `--target 10:00`） | `shots.csv` |
 | 5.5 卡点 | 有 BGM 时：`beatsync.py --work W --song 歌.mp3 [--split 3] [--anchor 4:62.5]`，见「精剪」 | 卡点后的 `shots.csv`、`bgm_plan.json` |
@@ -46,28 +46,24 @@ description: >
 
 1. **语音**：`transcribe.py` 在本地转写，首次运行要下载模型（small 约 500MB），先告诉用户。可中断重跑。
    转写可能有同音字或把环境声听成字，和画面对不上时以画面为准。
-2. **画面**：读完 `contact/sheet_*.jpg` 全部联系表，结合 `speech.json` 记下每段素材的内容和高光（素材内秒数）。
-   联系表默认 8 秒一帧，看不到两帧之间的动作；要看更细就 `frames.py --work W --every 4` 重新生成。
-3. **方向**：在联系表上找倒转和歪倒的画面，用 `orient.py` 记录：`--flip` 整段颠倒、`--unusable` 大半歪倒、
+2. **画面**：按顺序读 `contact/sheet_*.jpg`，每读几张就把看到的写进 `W/scene_notes.json`，不要全读完才写：
+   `{"c001": [{"start": 0, "end": 12, "description": "石阶上山，雾很大"}]}`。时间是素材内秒数，同一段素材内容变了就分条。
+   描述写看到的人物、动作、地点、情绪和值得留的瞬间，写具体，第 4 步靠它写故事。
+3. **校验**：`notes.py --work W` 列出没写的素材和错误；全部写完后生成 `footage_brief.md`（画面 + 语音）。
+   换了会话或上下文被压缩时，先读 `scene_notes.json`，再跑它看还缺什么，接着写。
+4. **方向**：看联系表时也留意倒转和歪倒的画面，用 `orient.py` 记录：`--flip` 整段颠倒、`--unusable` 大半歪倒、
    `--bad c005@12` 个别歪帧（秒数照抄联系表）。全部正常也跑一次 `orient.py --work W`，记录已检查过。
 
-### 可选：MiMo
-
-用户明确要用 MiMo 时才跑 `understand.py --work W --context "<背景>"`（按量计费，要 `MIMO_API_KEY`），它输出场景描述和
-`clip_understanding.json`，并判断方向，此时跳过上面 3 步。
-退出码 3 = 没有 key、key 无效或**余额不足 / 欠费**：原话告诉用户「MiMo 不可用，请到小米 MiMo 开放平台充值（或配置
-MIMO_API_KEY）」，并问用户是否改回默认流程。
+联系表默认每 8 秒一帧，外加画面切换处补的帧。某段素材内容看不清时，用 `frames.py --work W --every 4` 抽得更密。
+你只看到这些帧，也听不到环境声和音乐；描述里不要写看不到的内容。
 
 ## 第 4 步：写故事（你的活，按 references/story_plan.md）
 
-1. **先剔除无关素材**：看联系表和 `speech.json`，把与主题无关的（日常、别的行程、测试镜头）
-   列出来告诉用户，转换时 `--exclude c059-c062,...`。拿不准就问用户。同一场景的多条素材可能是不同角度，
-   都保留，取舍由用户决定。
-2. 默认：直接写 `W/story_plan.json`，把关键瞬间写成 `pins`（素材内秒数），每章定 `rhythm`（见「精剪」），然后
-   `story.py --work W --check --exclude ...`。
-3. 跑过 MiMo：读 `W/understanding/agent_narration_brief.md`，写 `W/recap_story_plan.json`（video-script 的
-   director_intent + beats，时间用代理长片秒；把内容上的关键瞬间写进 `key_moments`，自动评分只看画质，
-   看不懂内容；再给每个 beat 定 `rhythm`，见「精剪」），然后 `story.py --work W --from-recap --exclude ...`。
+1. 读 `W/footage_brief.md`。
+2. **先剔除无关素材**：把与主题无关的（日常、别的行程、测试镜头）列出来告诉用户，转换时
+   `--exclude c059-c062,...`。拿不准就问用户。同一场景的多条素材可能是不同角度，都保留，取舍由用户决定。
+3. 写 `W/story_plan.json`：把关键瞬间写成 `pins`（素材内秒数；自动评分只看画质，看不懂内容），每章定 `rhythm`
+   （见「精剪」），然后 `story.py --work W --check --exclude ...`。
 4. 用户只要「快速出一版」：`story.py --work W --default --chapters N --exclude ...`。
 
 ## 第 5 步：分镜（plan.py 自动做，你负责把关）
@@ -90,7 +86,7 @@ MIMO_API_KEY）」，并问用户是否改回默认流程。
 两种模式共用下面的规则（「总时长精确」只属于定长模式）：
 
 - **节奏**：长 12-18s / 短 3-6s / 短 / 中 6-9s 循环；章内大体按拍摄时间，最多挪 2 位避免连续长镜头或三连短镜头。
-- **必选瞬间**：`must_keep_moment` 转成的 pin 最先放，以该瞬间为中心取镜头。
+- **必选瞬间**：`pins` 最先放，以该瞬间为中心取镜头。
 - **挑镜头**：其余镜头取得分最高、不含坏帧的窗口；同一素材复用会降权，区间不重叠，素材首尾 0.5s 不取。
 - **切点**：入点 1.5s 内有静音就整体挪过去，少切在半句话上（不判断有没有人说话，见 pitfalls.md「人声分」）。
 - **hook 章**放最前当冷开场；带 `intercut` 的章节两条线轮流出镜头。
