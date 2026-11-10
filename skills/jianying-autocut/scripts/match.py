@@ -11,11 +11,16 @@
 只认用户在页面上确认过的对照：已确认的对照变成 pins，镜头所属章决定素材进哪章。
 有未确认的对照或格式错误就报错退出，不写 story_plan.json。格式见 references/shoot_plan.md。
 """
+import argparse
 import json
 import os
+import sys
 
 from common import read_csv
 from plan import FUNCTION_RHYTHM, RHYTHMS
+from story import validate as story_validate
+
+MERGE_S = 1.0     # 同章同素材两个 pin 相差不到 1 秒：plan.py 会因窗口已占用跳过第二个，这里先合并并报出来
 
 
 def load_inputs(work):
@@ -86,3 +91,90 @@ def validate(shoot_plan, matches, durations):
             errs.append(f"{prefix}：章 {x.get('chapter')} 不存在")
         _check_at(prefix, cid, x.get("at"), durations, errs)
     return errs
+
+
+def build_story_plan(shoot_plan, matches):
+    """返回 (story_plan, report)。只用 confirmed 的对照和 accepted 的计划外素材；没有 pin 的章不输出。"""
+    shots = sorted(shoot_plan.get("shots", []), key=lambda s: (s.get("order", 0), s["id"]))
+    confirmed = {sid: m for sid, m in matches.get("matches", {}).items() if m.get("confirmed") is True}
+    extras = matches.get("extras", {})
+    report = {"missing": {}, "dropped_chapters": [], "rejected_extras": 0, "merged_pins": [],
+              "pending_extras": [cid for cid, x in extras.items() if x.get("accepted") is None]}
+    report["rejected_extras"] = sum(1 for x in extras.values() if x.get("accepted") is False)
+
+    out = []
+    for ch in sorted(shoot_plan.get("chapters", []), key=lambda c: (c.get("order", 0), c["id"])):
+        wanted = []
+        for s in shots:
+            if s.get("chapter") != ch["id"]:
+                continue
+            if s["id"] in confirmed:
+                wanted.append((confirmed[s["id"]]["clip_id"], to_seconds(confirmed[s["id"]]["at"])))
+            else:
+                report["missing"].setdefault(ch["id"], []).append(s["id"])
+        wanted += [(cid, to_seconds(x["at"])) for cid, x in extras.items()
+                   if x.get("chapter") == ch["id"] and x.get("accepted") is True]
+        pins = []
+        for cid, at in wanted:
+            near = next((p for p in pins if p["clip_id"] == cid and abs(p["at"] - at) < MERGE_S), None)
+            if near:
+                report["merged_pins"].append((cid, near["at"], at))
+            else:
+                pins.append({"clip_id": cid, "at": at})
+        if not pins:
+            report["dropped_chapters"].append(ch["id"])
+            continue
+        c = {"id": ch["id"], "title": ch.get("title", ch["id"]), "function": ch["function"]}
+        if ch.get("rhythm"):
+            c["rhythm"] = ch["rhythm"]
+        c.update(clip_ids=list(dict.fromkeys(p["clip_id"] for p in pins)), pool="own", pins=pins)
+        out.append(c)
+    story = {"director_intent": shoot_plan.get("meta", {}).get("intent", ""), "chapters": out}
+    return story, report
+
+
+def _print_report(shoot_plan, story, report, durations, out_path):
+    titles = {ch["id"]: ch.get("title", "") for ch in shoot_plan.get("chapters", [])}
+    for ch_id, sids in report["missing"].items():
+        print(f"漏拍：{ch_id} {titles.get(ch_id, '')}：{'、'.join(sids)}")
+    for ch_id in report["dropped_chapters"]:
+        print(f"整章没有素材，已删除：{ch_id} {titles.get(ch_id, '')}")
+    if report["pending_extras"]:
+        print(f"计划外素材待决定 {len(report['pending_extras'])} 段：{'、'.join(report['pending_extras'])}"
+              f"（请在页面上采纳或拒绝）")
+    if report["rejected_extras"]:
+        print(f"计划外素材已拒绝 {report['rejected_extras']} 段")
+    for cid, kept, dropped in report["merged_pins"]:
+        print(f"合并了相差不到 {MERGE_S:g} 秒的 pin：{cid} @{kept:g} / {dropped:g}")
+    used = {c for ch in story["chapters"] for c in ch["clip_ids"]}
+    print(f"未被任何章引用的素材 {len(set(durations) - used)} 段（不进成片）")
+    print(f"→ {out_path}")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--work", required=True)
+    args = ap.parse_args(argv)
+
+    shoot_plan, matches, durations = load_inputs(args.work)
+    errs = validate(shoot_plan, matches, durations)
+    if errs:
+        print("拍摄脚本或对照表有问题：\n  " + "\n  ".join(errs), file=sys.stderr)
+        return 1
+    story, report = build_story_plan(shoot_plan, matches)
+    if not story["chapters"]:
+        print("没有任何已确认的匹配，没法生成故事", file=sys.stderr)
+        return 1
+    errs = story_validate(story, set(durations))
+    if errs:
+        print("生成的 story_plan 有问题：\n  " + "\n  ".join(errs), file=sys.stderr)
+        return 1
+    out_path = os.path.join(args.work, "story_plan.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(story, f, ensure_ascii=False, indent=1)
+    _print_report(shoot_plan, story, report, durations, out_path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,6 +1,9 @@
 import copy
+import json
+import os
 
-from match import to_seconds, validate
+from common import write_csv
+from match import build_story_plan, main, to_seconds, validate
 
 _SHOOT_PLAN = {
     "meta": {"title": "枸杞岛两日", "intent": "一座岛从雾里慢慢露出来", "place": "枸杞岛", "days": 2, "stage": "editing"},
@@ -77,3 +80,89 @@ def test_bad_extras_are_reported():
                    "c004": {"chapter": "ch2", "at": "x", "accepted": True}}
     errs = validate(sp, m, d)
     assert all(any(f"计划外素材 {c}" in e for e in errs) for c in ("c404", "c003", "c004"))
+
+
+def _write_work(tmp_path, sp, m, d):
+    with open(os.path.join(tmp_path, "shoot_plan.json"), "w", encoding="utf-8") as f:
+        json.dump(sp, f, ensure_ascii=False)
+    with open(os.path.join(tmp_path, "matches.json"), "w", encoding="utf-8") as f:
+        json.dump(m, f, ensure_ascii=False)
+    write_csv(os.path.join(tmp_path, "inventory.csv"),
+              [{"clip_id": c, "duration_s": dur} for c, dur in d.items()], ["clip_id", "duration_s"])
+
+
+def test_build_maps_confirmed_matches_to_pins():
+    sp, m, _ = _inputs()
+    story, rep = build_story_plan(sp, m)
+    ch1, ch2 = story["chapters"]
+    assert ch1["pins"] == [{"clip_id": "c001", "at": 10.0}] and ch1["function"] == "hook" and ch1["pool"] == "own"
+    assert ch2["clip_ids"] == ["c002"] and [p["at"] for p in ch2["pins"]] == [15.0, 80.0]
+    assert story["director_intent"] == sp["meta"]["intent"] and rep["missing"] == {}
+
+
+def test_chapters_follow_order_field():
+    sp, m, _ = _inputs()
+    sp["chapters"][0]["order"], sp["chapters"][1]["order"] = 2, 1
+    story, _ = build_story_plan(sp, m)
+    assert [c["id"] for c in story["chapters"]] == ["ch2", "ch1"]
+
+
+def test_missing_shot_and_dropped_chapter():
+    sp, m, _ = _inputs()
+    del m["matches"]["S01"]
+    story, rep = build_story_plan(sp, m)
+    assert [c["id"] for c in story["chapters"]] == ["ch2"]
+    assert rep["dropped_chapters"] == ["ch1"] and rep["missing"] == {"ch1": ["S01"]}
+
+
+def test_extras_accepted_pending_rejected():                 # Review Focus 5
+    sp, m, _ = _inputs()
+    m["extras"] = {"c003": {"chapter": "ch2", "at": 5, "accepted": True},
+                   "c004": {"chapter": "ch2", "at": 1, "accepted": None},
+                   "c005": {"chapter": "ch1", "at": 1, "accepted": False}}
+    story, rep = build_story_plan(sp, m)
+    assert "c003" in story["chapters"][1]["clip_ids"]
+    assert all("c004" not in c["clip_ids"] and "c005" not in c["clip_ids"] for c in story["chapters"])
+    assert rep["pending_extras"] == ["c004"] and rep["rejected_extras"] == 1
+
+
+def test_extra_shared_with_other_chapter_passes_story_validate():   # Review Focus 4
+    from story import validate as story_validate
+    sp, m, d = _inputs()
+    m["extras"] = {"c001": {"chapter": "ch2", "at": 25, "accepted": True}}
+    story, _ = build_story_plan(sp, m)
+    assert "c001" in story["chapters"][1]["clip_ids"]
+    assert story_validate(story, set(d)) == []
+
+
+def test_near_duplicate_pins_are_merged():                  # Review Focus 1
+    sp, m, _ = _inputs()
+    m["matches"]["S03"].update(at=15.4, start=None, end=None)
+    story, rep = build_story_plan(sp, m)
+    assert [p["at"] for p in story["chapters"][1]["pins"]] == [15.0]
+    assert rep["merged_pins"] == [("c002", 15.0, 15.4)]
+
+
+def test_main_writes_story_plan(tmp_path, capsys):
+    sp, m, d = _inputs()
+    del m["matches"]["S01"]
+    _write_work(tmp_path, sp, m, d)
+    assert main(["--work", str(tmp_path)]) == 0
+    with open(tmp_path / "story_plan.json", encoding="utf-8") as f:
+        assert [c["id"] for c in json.load(f)["chapters"]] == ["ch2"]
+    out = capsys.readouterr().out
+    assert "S01" in out and "ch1" in out and "未被任何章引用的素材 4 段" in out
+
+
+def test_main_refuses_when_nothing_confirmed(tmp_path):    # Review Focus 2
+    sp, m, d = _inputs()
+    m["matches"] = {}
+    _write_work(tmp_path, sp, m, d)
+    assert main(["--work", str(tmp_path)]) == 1 and not (tmp_path / "story_plan.json").exists()
+
+
+def test_main_refuses_on_validation_errors(tmp_path):
+    sp, m, d = _inputs()
+    m["matches"]["S02"]["confirmed"] = False
+    _write_work(tmp_path, sp, m, d)
+    assert main(["--work", str(tmp_path)]) == 1 and not (tmp_path / "story_plan.json").exists()
