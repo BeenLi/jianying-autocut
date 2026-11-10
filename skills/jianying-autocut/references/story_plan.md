@@ -6,6 +6,7 @@
 |---|---|---|
 | 手写（默认） | 读 `footage_brief.md`，写 `story_plan.json`，再 `story.py --check` | 默认流程 |
 | 兜底 | `story.py --default --chapters N`，按拍摄时间间隔切章 | 用户只要「快速出一版」 |
+| 拍摄脚本 | 用户在页面上确认对照后，`match.py --work W` 生成，见 `shoot_plan.md` | 模式 A 的脚本页面或用户口述的故事 |
 
 ## 写故事的思路
 

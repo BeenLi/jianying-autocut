@@ -47,6 +47,16 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | **7&nbsp;Polish and export**<br><sub>you</sub> | Color, transitions, subtitles and export in JianYing | Final video |
 
 
+### Two ways in: plan the shoot, or cut to your own story
+
+- **Before shooting**: tell Claude where you are going, for how long and what the story is. It writes a shooting script
+  (chapters, a shot list, talking-to-camera points) and publishes it as a Claude Artifact page only you can open. On location,
+  open it on your phone and tick each shot as you get it.
+- **After shooting**: steps 1–3 run as above. When you have a shooting script (or tell Claude your story), step 4 does not invent a
+  story: Claude matches footage to each planned shot and lists the matches (with thumbnails), missed shots and good unplanned
+  footage on the same page. Once you confirm them there, `match.py` writes `story_plan.json` and the rest runs as usual.
+- No story of your own? Claude writes one, as before.
+
 ## Features
 
 | Feature | Status | Notes |
@@ -164,8 +174,9 @@ Run the tests: `./run_tests.sh`
 ```text
 skills/jianying-autocut/                The skill itself (what npx skills / the plugin installs)
   SKILL.md                              Instructions for the agent (skill entry point)
-  scripts/                              probe · frames · transcribe · notes · orient · story · plan · beatsync · build · common
-  references/                           Story-writing guide (story_plan.md), field-tested pitfalls (pitfalls.md)
+  scripts/                              probe · frames · transcribe · notes · orient · story · match · plan · beatsync · build · common
+  references/                           Story-writing guide (story_plan.md), shooting-script page (shoot_plan.md), field-tested pitfalls (pitfalls.md)
+  assets/                               Shooting-script page template (shoot_plan_page.html)
   vendor/video-script-refs/             Vendored directing-method document (MIT, see Acknowledgements)
   vendor/video-script-refs/             Directing method docs from video-script (MIT)
 .claude-plugin/marketplace.json         Claude Code plugin manifest
