@@ -29,3 +29,19 @@ def test_validate_rejects_unknown_rhythm():
     from story import validate
     errs = validate({"chapters": [{"id": "a", "clip_ids": [], "rhythm": "turbo"}]}, set())
     assert any("rhythm" in e for e in errs)
+
+
+def test_validate_shared_clip_ok_when_pinned_in_every_chapter():
+    from story import validate
+    plan = {"chapters": [
+        {"id": "a", "clip_ids": ["c001"], "pins": [{"clip_id": "c001", "at": 5}]},
+        {"id": "b", "clip_ids": ["c001"], "pins": [{"clip_id": "c001", "at": 60}]}]}
+    assert validate(plan, {"c001"}) == []
+
+
+def test_validate_shared_clip_needs_pin_in_each_chapter():
+    from story import validate
+    plan = {"chapters": [
+        {"id": "a", "clip_ids": ["c001"], "pins": [{"clip_id": "c001", "at": 5}]},
+        {"id": "b", "clip_ids": ["c001"], "pins": []}]}
+    assert any("c001" in e and "pin" in e for e in validate(plan, {"c001"}))

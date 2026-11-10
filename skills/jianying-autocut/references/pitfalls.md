@@ -3,6 +3,7 @@
 | 坑 | 结论 | 代码位置 |
 |---|---|---|
 | 实测通过 | 2026-10-23：164 直写的 5 分钟草稿（42 镜头 + 章节标题轨 + BGM 3 段）在剪映 11.6.13345 打开正常、时间线完整 | — |
+| 实测通过（11.7） | 2026-11-10：枸杞岛 21 段手机素材生成的草稿（21 镜头 + 章节标题 + 人声字幕 5 条 + 卡点 BGM，BGM 带音量关键帧避让人声）在剪映 11.7.0 打开正常，字幕和避让效果经用户确认 | — |
 | 版本号 | 写本机真实 `new_version`（11.6 = 164.0.0），每次从草稿根目录 `root_meta_info.json` 读（单个草稿的 `draft_meta_info.json` 被剪映打开后会加密，读不了）；`app_version` 读 `/Applications/VideoFusion-macOS.app` 的 Info.plist。剪映会自动更新，别硬编码 | `common.detect_versions`、`build.stamp_versions` |
 | 加密 | pyJianYingDraft 的加解密只支持 Windows。Mac 上写明文 `draft_info.json`，剪映首次打开时自己加密；之后读不回来 | — |
 | 清场 | 剪映运行中写草稿不会被发现，退出时还会覆盖；重新生成要整目录删掉，不能在旧目录上覆盖 | `build.main` |

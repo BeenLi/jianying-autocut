@@ -47,6 +47,14 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | **7&nbsp;精修导出**<br><sub>你</sub> | 剪映里调色、转场、字幕、导出成片 | 成片 |
 
 
+### 两种用法：拍之前写脚本，或按你的故事剪
+
+- **拍摄前**：告诉 Claude 去哪、几天、想讲什么，它写一份拍摄脚本（章节、镜头清单、出镜口播要点），发布成一个只有你能看的
+  Claude Artifact 页面。拍摄时在手机上打开，拍完一个勾一个，随手写备注。
+- **拍完以后**：素材照上面的第 1–3 步处理。有拍摄脚本（或你口述的故事）时，第 4 步不由 Claude 编故事，而是把素材对到每个镜头上，
+  在同一个页面列出对照（带缩略图）、漏拍的镜头和计划外的好素材。你在页面上确认后，`match.py` 生成 `story_plan.json`，后面照常。
+- 没有自己的故事，就按原来的流程交给 Claude 写。
+
 ## 支持的功能
 
 | 功能 | 状态 | 说明 |
@@ -164,8 +172,9 @@ uv run --script $S/build.py --work $W --name 我的旅行粗剪 --titles --bgm ~
 ```text
 skills/jianying-autocut/                技能本体（npx skills / 插件安装的就是这个文件夹）
   SKILL.md                              给 Agent 的使用说明（技能入口）
-  scripts/                              probe · frames · transcribe · notes · orient · story · plan · beatsync · build · common
-  references/                           写故事指引（story_plan.md）、实测踩坑（pitfalls.md）
+  scripts/                              probe · frames · transcribe · notes · orient · story · match · plan · beatsync · build · common
+  references/                           写故事指引（story_plan.md）、拍摄脚本页面（shoot_plan.md）、实测踩坑（pitfalls.md）
+  assets/                               拍摄脚本页面模板（shoot_plan_page.html）
   vendor/video-script-refs/             收录的导演方法文档（MIT，见下方鸣谢）
   vendor/video-script-refs/             video-script 的导演方法文档（MIT）
 .claude-plugin/marketplace.json         Claude Code 插件清单

@@ -1,0 +1,539 @@
+<title>拍摄脚本</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* Layout: 场记单。手机上是一列可折叠的章节和镜头卡；剪辑视图在宽屏上是"镜头清单 | 对照台"两栏 */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --sunk: #e4e8ed; --ink: #17202b; --muted: #5a6573; --line: #d3d9e0;
+  --accent: #1d5b86; --accent-ink: #ffffff; --accent-soft: #dce8f2;
+  --ok: #2b7a4b; --ok-bg: #e0f1e6; --warn: #9a6200; --warn-bg: #faefd6; --bad: #b0342c; --bad-bg: #f7dfdc;
+  --font-body: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12171d; --surface: #1a2129; --sunk: #232c36; --ink: #e6ebf0; --muted: #9aa6b3; --line: #2e3945;
+  --accent: #6fa8d4; --accent-ink: #0d1620; --accent-soft: #1f3344;
+  --ok: #6cc391; --ok-bg: #173225; --warn: #e2b04f; --warn-bg: #362a12; --bad: #ee8077; --bad-bg: #3a1c1a;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12171d; --surface: #1a2129; --sunk: #232c36; --ink: #e6ebf0; --muted: #9aa6b3; --line: #2e3945;
+  --accent: #6fa8d4; --accent-ink: #0d1620; --accent-soft: #1f3344;
+  --ok: #6cc391; --ok-bg: #173225; --warn: #e2b04f; --warn-bg: #362a12; --bad: #ee8077; --bad-bg: #3a1c1a;
+  color-scheme: dark }
+
+*, *::before, *::after { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 12px 48px; }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; line-height: 1.3; }
+p { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 12px; min-height: 36px; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type=text], input[type=number], select, textarea { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; width: 100%; }
+textarea { resize: vertical; min-height: 2.6em; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+
+/* 头部 */
+.head { display: grid; gap: 8px; padding-block: 8px 4px; }
+.head-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; justify-content: space-between; }
+.head h1 { font-size: 1.5rem; font-weight: 700; }
+.intent { font-size: 1.02rem; color: var(--muted); }
+.facts { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .9rem; color: var(--muted); }
+.switch { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--surface); }
+.switch button { border: 0; border-radius: 0; min-height: 34px; padding: 4px 16px; background: transparent; }
+.switch button[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); }
+.banner { border-radius: var(--r); padding: 10px 14px; font-size: .92rem; background: var(--warn-bg); color: var(--ink); border: 1px solid var(--line); }
+.progress { height: 6px; border-radius: 99px; background: var(--sunk); overflow: hidden; }
+.progress > i { display: block; height: 100%; background: var(--ok); }
+
+/* 拍摄视图 */
+.chapter { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.ch-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; }
+.ch-head h2 { font-size: 1.08rem; flex: 1; min-width: 0; }
+.ch-no { font-family: var(--font-mono); font-weight: 700; color: var(--accent); min-width: 1.6em; }
+.ch-meta { font-size: .85rem; color: var(--muted); white-space: nowrap; }
+.chev { transition: transform .15s; color: var(--muted); }
+.chapter[data-open=false] .chev { transform: rotate(-90deg); }
+.chapter[data-open=false] .ch-body { display: none; }
+.ch-body { border-top: 1px solid var(--line); display: grid; gap: 0; }
+.ch-tools { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; background: var(--sunk); }
+.shots { list-style: none; margin: 0; padding: 0; }
+.shot { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.shot:first-child { border-top: 0; }
+.tick { display: grid; justify-items: center; gap: 4px; cursor: pointer; }
+.tick input { width: 26px; height: 26px; accent-color: var(--ok); margin: 0; }
+.slate { font-family: var(--font-mono); font-size: .78rem; font-weight: 700; color: var(--muted); }
+.shot.done .desc { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line); }
+.shot-body { display: grid; gap: 6px; min-width: 0; }
+.desc { font-weight: 500; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { font-size: .78rem; padding: 1px 8px; border-radius: 99px; background: var(--sunk); color: var(--muted); }
+.tag.talk { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.talk-text { margin: 0; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; font-size: .95rem; }
+.tips { font-size: .88rem; color: var(--muted); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.unsaved { font-size: .78rem; color: var(--bad); font-weight: 500; }
+.form { display: grid; gap: 8px; padding: 10px; background: var(--sunk); border-radius: 8px; }
+.form label { display: grid; gap: 2px; font-size: .82rem; color: var(--muted); }
+.form .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.empty { background: var(--surface); border: 1px dashed var(--line); border-radius: var(--r); padding: 28px 20px; text-align: center; color: var(--muted); }
+
+/* 剪辑视图 */
+.desk { display: grid; gap: 16px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .desk { grid-template-columns: minmax(220px, 300px) 1fr; align-items: start; } .list { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 8px); } }
+.list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 8px; display: grid; gap: 2px; max-height: 80vh; overflow: auto; }
+.list h3 { font-size: .82rem; color: var(--muted); font-weight: 500; padding: 8px 8px 2px; letter-spacing: .04em; }
+.item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; padding: 6px 8px; min-height: 34px; border-radius: 6px; }
+.item:hover { background: var(--sunk); }
+.item[aria-current=true] { background: var(--accent-soft); }
+.item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9rem; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .82rem; color: var(--muted); padding: 4px 8px 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 4px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.panel h2 { font-size: 1.15rem; }
+.state { display: inline-block; font-size: .82rem; font-weight: 500; padding: 2px 10px; border-radius: 99px; }
+.state.ok { background: var(--ok-bg); color: var(--ok); } .state.warn { background: var(--warn-bg); color: var(--warn); } .state.bad { background: var(--bad-bg); color: var(--bad); }
+.thumbs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.thumbs figure { margin: 0; flex: none; width: 168px; }
+.thumbs img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; background: var(--sunk); display: block; }
+.thumbs figcaption { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); }
+dl.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: .92rem; }
+dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+.card.accepted { border-color: var(--ok); } .card.rejected { opacity: .6; }
+@media (prefers-reduced-motion: reduce) { .chev { transition: none; } }
+</style>
+
+<div class="wrap" id="app"></div>
+
+<script>
+(() => {
+  const COLS = ["plan", "chapters", "shots", "clips", "matches", "extras", "requests"];
+  const FUNC = { hook: "钩子", setup: "铺垫", turn: "转折", escalation: "推进", payoff: "高潮" };
+  const RHY = { slow: "慢", normal: "中", fast: "快", montage: "快切" };
+  const CONF = { high: "高", mid: "中", low: "低" };
+  const SIZES = ["远景", "全景", "中景", "近景", "特写", "空镜"];
+  const USER_FIELDS = ["desc", "size", "duration", "kind", "talk", "tips"];
+  const S = { meta: null, chapters: {}, shots: {}, clips: {}, matches: {}, extras: {}, requests: {},
+    loaded: new Set(), status: "loading", db: null, canWrite: true, view: null, sel: null,
+    open: {}, editing: null, editingCh: null, armDelete: null, failed: new Map(), dead: new Map(), drafts: {} };
+
+  const app = document.getElementById("app");
+  const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const num = v => { if (v === null || v === undefined || v === "") return null; if (typeof v === "number") return v;
+    const s = String(v).trim(); if (s.includes(":")) { const [m, x] = s.split(":"); const r = +m * 60 + +x; return isNaN(r) ? null : r; } const r = +s; return isNaN(r) ? null : r; };
+  const fmt = v => { const t = num(v); if (t === null) return "—"; const m = Math.floor(t / 60), s = t - m * 60; return `${m}:${s < 10 ? "0" : ""}${(Math.round(s * 10) / 10)}`; };
+  const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.id).localeCompare(String(b.id));
+  const chapters = () => Object.entries(S.chapters).map(([id, c]) => ({ ...c, id })).sort(byOrder);
+  const shotsOf = ch => Object.entries(S.shots).map(([id, s]) => ({ ...s, id })).filter(s => s.chapter === ch).sort(byOrder);
+  const allShots = () => chapters().flatMap(c => shotsOf(c.id));
+  const ro = () => !S.db || !S.canWrite;
+  const dis = () => ro() ? "disabled" : "";
+
+  // ---------- 写入：同一文档一次只写一个；失败记下，下次操作时重试 ----------
+  const queues = new Map();
+  const PERMANENT = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
+  function write(path, data, mode = "update") {
+    if (ro()) return Promise.resolve();
+    // 同一文档上一次没保存成功的改动并进这一次，免得后一次覆盖前一次（先勾已拍、再写备注都失败时两样都要留下）
+    const f = S.failed.get(path);
+    if (f) {
+      S.failed.delete(path);
+      if (mode === "update" && f.mode !== "delete") { data = { ...f.data, ...data }; mode = f.mode; }
+    }
+    const run = async () => {
+      const ref = S.db.doc(path);
+      try {
+        if (mode === "delete") await ref.delete(); else if (mode === "set") await ref.set(data); else await ref.update(data);
+        S.dead.delete(path);
+      } catch (e) {
+        const code = e && e.code;
+        if (PERMANENT.includes(code)) S.dead.set(path, code);   // 文档已被删除、空间满了等：重试也不会成功
+        else {
+          const g = S.failed.get(path);                          // 排队期间又失败了一次：合并，不覆盖
+          S.failed.set(path, g && mode === "update" && g.mode !== "delete" ? { data: { ...g.data, ...data }, mode: g.mode } : { data, mode });
+        }
+      }
+      render();
+    };
+    const p = (queues.get(path) || Promise.resolve()).then(run);
+    queues.set(path, p);
+    return p;
+  }
+  function retryFailed() {
+    for (const [path, f] of [...S.failed]) { S.failed.delete(path); write(path, f.data, f.mode); }
+  }
+
+  // ---------- 渲染 ----------
+  // 表单里还没保存的内容记在 S.drafts（按元素 id），每次重绘后放回去：数据库推送新快照时不丢用户正在填的东西
+  function render() {
+    const a = document.activeElement;
+    const keep = a && a.id && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) ? { id: a.id, s: a.selectionStart, e: a.selectionEnd } : null;
+    app.innerHTML = header() + body();
+    for (const [id, v] of Object.entries(S.drafts)) {
+      const m = id.match(/^note-(.+)$/);
+      if (m && S.shots[m[1]] && (S.shots[m[1]].note || "") === v.trim()) { delete S.drafts[id]; continue; }   // 已经存上了
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    }
+    if (keep) { const el = document.getElementById(keep.id); if (el) { el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch (_) {} } }
+  }
+  const clearDrafts = re => { for (const id of Object.keys(S.drafts)) if (re.test(id)) delete S.drafts[id]; };
+
+  function header() {
+    const m = S.meta || {};
+    const shots = allShots();
+    const done = shots.filter(s => s.done).length;
+    const view = currentView();
+    let banner = "";
+    if (S.status === "nodb") banner = "现在连不上脚本数据：请登录 claude.ai 后重新打开这个页面。";
+    else if (S.status === "timeout") banner = "数据还没加载出来，网络可能不太好。刷新一下再试。";
+    else if (S.status === "error") banner = "数据连接断了，刷新页面重新连接。";
+    else if (S.db && !S.canWrite) banner = "你只有查看权限，改动不会保存。";
+    if (S.failed.size) banner += `${banner ? " " : ""}有 ${S.failed.size} 处改动没保存，下次操作时会自动重试。`;
+    if (S.dead.size) banner += `${banner ? " " : ""}有 ${S.dead.size} 处改动保存不了（内容可能已在别处被删除，或空间已满），刷新页面看最新内容。`;
+    return `<header class="head">
+      <div class="head-top">
+        <h1>${esc(m.title || "拍摄脚本")}</h1>
+        <div class="switch" role="group" aria-label="视图">
+          <button data-act="view" data-v="shoot" aria-pressed="${view === "shoot"}">拍摄</button>
+          <button data-act="view" data-v="edit" aria-pressed="${view === "edit"}">剪辑</button>
+        </div>
+      </div>
+      ${m.intent ? `<p class="intent">${esc(m.intent)}</p>` : ""}
+      <div class="facts">${m.place ? `<span>${esc(m.place)}</span>` : ""}${m.days ? `<span>${esc(m.days)} 天</span>` : ""}
+        ${shots.length ? `<span>已拍 <b class="mono">${done}/${shots.length}</b></span>` : ""}</div>
+      ${shots.length ? `<div class="progress" aria-hidden="true"><i style="width:${(done / shots.length * 100).toFixed(1)}%"></i></div>` : ""}
+      ${banner ? `<p class="banner" role="status">${esc(banner)}</p>` : ""}
+    </header>`;
+  }
+
+  function currentView() { return S.view || (S.meta && S.meta.stage === "editing" ? "edit" : "shoot"); }
+
+  function body() {
+    if (S.status === "loading" && !S.meta && !Object.keys(S.shots).length) return `<p class="empty">正在加载拍摄脚本…</p>`;
+    if (!S.meta && !Object.keys(S.chapters).length) return `<div class="empty"><p>还没有拍摄脚本。</p><p>在对话里让 Claude 写一份，它会出现在这里。</p></div>`;
+    return currentView() === "edit" ? editView() : shootView();
+  }
+
+  // ---------- 拍摄视图 ----------
+  function shootView() {
+    const chs = chapters();
+    return chs.map((c, i) => chapterBlock(c, i, chs.length)).join("") +
+      `<div class="row"><button data-act="add-ch" ${dis()}>＋ 加一章</button></div>`;
+  }
+
+  function chapterBlock(c, i, n) {
+    const shots = shotsOf(c.id);
+    const done = shots.filter(s => s.done).length;
+    const open = S.open[c.id] !== false;
+    const fail = S.failed.has("chapters/" + c.id);
+    const tools = S.editingCh === c.id ? chapterForm(c, i, n, shots.length) :
+      `<div class="ch-tools"><button data-act="add-shot" data-ch="${esc(c.id)}" ${dis()}>＋ 加镜头</button>
+        <button data-act="edit-ch" data-ch="${esc(c.id)}" ${dis()}>改这一章</button>${fail ? `<span class="unsaved">未保存</span>` : ""}</div>`;
+    return `<section class="chapter" data-open="${open}">
+      <div class="ch-head" data-act="toggle" data-ch="${esc(c.id)}" role="button" tabindex="0" aria-expanded="${open}">
+        <span class="ch-no">${i + 1}</span>
+        <h2>${esc(c.title)}</h2>
+        <span class="ch-meta">${FUNC[c.function] || esc(c.function || "")}${c.rhythm ? " · " + (RHY[c.rhythm] || esc(c.rhythm)) : ""} · <span class="mono">${done}/${shots.length}</span></span>
+        <span class="chev" aria-hidden="true">▾</span>
+      </div>
+      <div class="ch-body">
+        <ul class="shots">${shots.map((s, k) => shotCard(s, k, shots.length)).join("")}</ul>
+        ${tools}
+      </div>
+    </section>`;
+  }
+
+  function chapterForm(c, i, n, count) {
+    const opt = (map, v) => Object.entries(map).map(([k, l]) => `<option value="${k}" ${k === v ? "selected" : ""}>${l}</option>`).join("");
+    return `<div class="ch-tools"><div class="form" style="flex:1">
+      <label>章名<input type="text" id="cht-${esc(c.id)}" value="${esc(c.title)}"></label>
+      <div class="two"><label>作用<select id="chf-${esc(c.id)}">${opt(FUNC, c.function)}</select></label>
+        <label>节奏<select id="chr-${esc(c.id)}"><option value="">按作用默认</option>${opt(RHY, c.rhythm)}</select></label></div>
+      <div class="row"><button class="primary" data-act="save-ch" data-ch="${esc(c.id)}">保存</button>
+        <button data-act="move-ch" data-ch="${esc(c.id)}" data-d="-1" ${i === 0 ? "disabled" : ""}>上移</button>
+        <button data-act="move-ch" data-ch="${esc(c.id)}" data-d="1" ${i === n - 1 ? "disabled" : ""}>下移</button>
+        ${count ? `<span class="muted" style="font-size:.85rem">先删掉本章镜头才能删章</span>` :
+          `<button class="danger" data-act="del-ch" data-ch="${esc(c.id)}">${S.armDelete === "ch:" + c.id ? "确认删除这一章" : "删除这一章"}</button>`}
+        <button data-act="cancel-ch">取消</button></div></div></div>`;
+  }
+
+  function shotCard(s, k, n) {
+    const fail = (S.failed.has("shots/" + s.id) || S.dead.has("shots/" + s.id));
+    const tags = [s.size, s.duration ? `${s.duration}s` : ""].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("") +
+      (s.kind === "talk" ? `<span class="tag talk">口播</span>` : "");
+    return `<li class="shot ${s.done ? "done" : ""}">
+      <label class="tick"><input type="checkbox" id="done-${esc(s.id)}" data-act="done" data-id="${esc(s.id)}" ${s.done ? "checked" : ""} ${dis()} aria-label="${esc(s.id)} 已拍">
+        <span class="slate">${esc(s.id)}</span></label>
+      <div class="shot-body">
+        <p class="desc">${esc(s.desc)}</p>
+        ${tags ? `<div class="tags">${tags}</div>` : ""}
+        ${s.kind === "talk" && s.talk ? `<blockquote class="talk-text">${esc(s.talk)}</blockquote>` : ""}
+        ${s.tips ? `<p class="tips">${esc(s.tips)}</p>` : ""}
+        <textarea id="note-${esc(s.id)}" data-act="note" data-id="${esc(s.id)}" rows="1" placeholder="备注：现场情况、拍了几条" ${dis()}>${esc(s.note || "")}</textarea>
+        <div class="row">${S.editing === s.id ? "" : `<button data-act="edit" data-id="${esc(s.id)}" ${dis()}>编辑</button>`}${fail ? `<span class="unsaved">未保存</span>` : ""}</div>
+        ${S.editing === s.id ? shotForm(s, k, n) : ""}
+      </div></li>`;
+  }
+
+  function shotForm(s, k, n) {
+    const id = esc(s.id);
+    return `<div class="form">
+      <label>画面描述<textarea id="f-desc-${id}" rows="2">${esc(s.desc)}</textarea></label>
+      <div class="two"><label>景别<select id="f-size-${id}"><option value="">不指定</option>${[...SIZES, ...(s.size && !SIZES.includes(s.size) ? [s.size] : [])].map(x => `<option value="${esc(x)}" ${x === s.size ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+        <label>建议时长（秒）<input type="number" min="1" id="f-duration-${id}" value="${esc(s.duration ?? "")}"></label></div>
+      <label>类型<select id="f-kind-${id}"><option value="visual" ${s.kind !== "talk" ? "selected" : ""}>画面</option><option value="talk" ${s.kind === "talk" ? "selected" : ""}>出镜口播</option></select></label>
+      <label>口播要点（口播镜头才填，约 4 字/秒）<textarea id="f-talk-${id}" rows="2">${esc(s.talk || "")}</textarea></label>
+      <label>拍摄小贴士<input type="text" id="f-tips-${id}" value="${esc(s.tips || "")}"></label>
+      <div class="row"><button class="primary" data-act="save-shot" data-id="${id}">保存</button>
+        <button data-act="move-shot" data-id="${id}" data-d="-1" ${k === 0 ? "disabled" : ""}>上移</button>
+        <button data-act="move-shot" data-id="${id}" data-d="1" ${k === n - 1 ? "disabled" : ""}>下移</button>
+        <button class="danger" data-act="del-shot" data-id="${id}">${S.armDelete === "shot:" + s.id ? "确认删除" : "删除镜头"}</button>
+        <button data-act="cancel-edit">取消</button></div>
+      <p class="muted" style="font-size:.82rem">调顺序只改这份脚本；剪成片时同一章的镜头按拍摄时间排，钩子章放在最前。</p></div>`;
+  }
+
+  // ---------- 剪辑视图 ----------
+  function shotState(s) {
+    const m = S.matches[s.id];
+    if (!m) return ["bad", "漏拍"];
+    return m.confirmed === true ? ["ok", "已确认"] : ["warn", "待确认"];
+  }
+
+  function editView() {
+    const chs = chapters();
+    const shots = allShots();
+    if (!S.sel || (!S.shots[S.sel] && !S.sel.startsWith("__"))) S.sel = (shots.find(s => shotState(s)[0] !== "ok") || shots[0] || {}).id || "__extras";
+    const extras = Object.keys(S.extras);
+    const pending = Object.values(S.extras).filter(x => x.accepted == null).length;
+    const reqNew = Object.values(S.requests).filter(r => r.status === "new").length;
+    const list = chs.map((c, i) => `<h3>${i + 1} ${esc(c.title)}</h3>` + shotsOf(c.id).map(s => {
+      const [cls] = shotState(s);
+      return `<button class="item" data-act="sel" data-id="${esc(s.id)}" aria-current="${S.sel === s.id}"><span class="dot ${cls}"></span><span class="mono" style="font-size:.8rem">${esc(s.id)}</span><span class="t">${esc(s.desc)}</span></button>`;
+    }).join("")).join("") +
+      `<h3>其他</h3>
+      <button class="item" data-act="sel" data-id="__extras" aria-current="${S.sel === "__extras"}"><span class="t">计划外素材 ${extras.length} 段${pending ? `（${pending} 段待决定）` : ""}</span></button>
+      <button class="item" data-act="sel" data-id="__requests" aria-current="${S.sel === "__requests"}"><span class="t">补充故事${reqNew ? `（${reqNew} 条待处理）` : ""}</span></button>`;
+    const counts = shots.reduce((a, s) => (a[shotState(s)[0]]++, a), { ok: 0, warn: 0, bad: 0 });
+    return `<div class="desk">
+      <nav class="list" aria-label="镜头清单">
+        <div class="legend"><span><i class="dot ok"></i>已确认 ${counts.ok}</span><span><i class="dot warn"></i>待确认 ${counts.warn}</span><span><i class="dot bad"></i>漏拍 ${counts.bad}</span></div>
+        ${list}
+      </nav>
+      <section class="panel">${S.sel === "__extras" ? extrasPanel() : S.sel === "__requests" ? requestsPanel() : shotPanel(S.shots[S.sel] && { ...S.shots[S.sel], id: S.sel })}</section>
+    </div>`;
+  }
+
+  function thumbs(cid) {
+    const t = (S.clips[cid] && S.clips[cid].thumbs) || [];
+    if (!t.length) return `<p class="muted" style="font-size:.88rem">${esc(cid)} 没有缩略图，可以在 Mac 上打开 contact/ 里的联系表对照。</p>`;
+    return `<div class="thumbs">${t.map(x => `<figure><img src="/_blob/${esc(x.id)}" alt="${esc(cid)} 第 ${esc(fmt(x.t))} 的画面" loading="lazy"><figcaption>${esc(cid)} @ ${esc(fmt(x.t))}</figcaption></figure>`).join("")}</div>`;
+  }
+
+  function clipOptions(sel) {
+    return Object.keys(S.clips).sort().map(c => `<option value="${esc(c)}" ${c === sel ? "selected" : ""}>${esc(c)}${S.clips[c].desc ? " · " + esc(String(S.clips[c].desc).slice(0, 24)) : ""}</option>`).join("");
+  }
+
+  function shotPanel(s) {
+    if (!s) return `<p class="muted">没有镜头。</p>`;
+    const m = S.matches[s.id];
+    const [cls, label] = shotState(s);
+    const id = esc(s.id);
+    const fail = (S.failed.has("matches/" + s.id) || S.dead.has("matches/" + s.id));
+    const assign = `<div class="form">
+      <div class="two"><label>换成素材<select id="m-clip-${id}"><option value="">选素材</option>${clipOptions(m && m.clip_id)}</select></label>
+        <label>素材内第几秒（如 15 或 1:05）<input type="text" id="m-at-${id}" value="${m ? esc(m.at) : ""}"></label></div>
+      <div class="row"><button data-act="reassign" data-id="${id}" ${dis()}>改成这个并确认</button>${m ? `<button class="danger" data-act="unmatch" data-id="${id}" ${dis()}>这个镜头不要了（标成漏拍）</button>` : ""}</div></div>`;
+    return `<div class="row" style="justify-content:space-between"><h2><span class="mono">${id}</span> ${esc(s.desc)}</h2><span class="state ${cls}">${label}</span></div>
+      ${s.kind === "talk" && s.talk ? `<blockquote class="talk-text">${esc(s.talk)}</blockquote>` : ""}
+      ${s.note ? `<p class="tips">拍摄备注：${esc(s.note)}</p>` : ""}
+      ${m ? `${thumbs(m.clip_id)}
+        <dl class="kv"><dt>素材</dt><dd class="mono">${esc(m.clip_id)} @ ${esc(fmt(m.at))}${m.start != null && m.end != null ? `（整句 ${esc(fmt(m.start))}–${esc(fmt(m.end))}）` : ""}</dd>
+          <dt>把握</dt><dd>${CONF[m.confidence] || "—"}${m.by === "user" ? " · 你改过" : " · Claude 建议"}</dd>
+          ${m.reason ? `<dt>理由</dt><dd>${esc(m.reason)}</dd>` : ""}
+          ${S.clips[m.clip_id] && S.clips[m.clip_id].desc ? `<dt>画面</dt><dd>${esc(S.clips[m.clip_id].desc)}</dd>` : ""}</dl>
+        <div class="row">${m.confirmed === true ? `<button data-act="unconfirm" data-id="${id}" ${dis()}>取消确认</button>` : `<button class="primary" data-act="confirm" data-id="${id}" ${dis()}>确认</button>`}${fail ? `<span class="unsaved">未保存</span>` : ""}</div>`
+        : `<p>还没有找到对应的素材，成片里这一章就少这个镜头。想补的话，在下面指定一段素材，或去「计划外素材」采纳 Claude 建议的片段。整章都没有素材会被删掉。</p>`}
+      ${assign}`;
+  }
+
+  function extrasPanel() {
+    const ids = Object.keys(S.extras).sort();
+    const chs = Object.fromEntries(chapters().map((c, i) => [c.id, `${i + 1} ${c.title}`]));
+    if (!ids.length) return `<h2>计划外素材</h2><p class="muted">Claude 还没有建议计划外的素材。</p>`;
+    return `<h2>计划外素材</h2><p class="muted">脚本里没写、但拍得不错的片段。采纳后会放进建议的章节。</p>` + ids.map(cid => {
+      const x = S.extras[cid];
+      const st = x.accepted === true ? "accepted" : x.accepted === false ? "rejected" : "";
+      return `<div class="card ${st}">
+        <div class="row" style="justify-content:space-between"><b class="mono">${esc(cid)} @ ${esc(fmt(x.at))}</b><span class="muted">放进 ${esc(chs[x.chapter] || x.chapter)}</span></div>
+        ${thumbs(cid)}
+        ${x.reason ? `<p>${esc(x.reason)}</p>` : ""}
+        <div class="row"><button class="${x.accepted === true ? "primary" : ""}" data-act="extra" data-id="${esc(cid)}" data-v="1" ${dis()}>采纳</button>
+          <button class="${x.accepted === false ? "primary" : ""}" data-act="extra" data-id="${esc(cid)}" data-v="0" ${dis()}>不要</button>
+          ${S.failed.has("extras/" + cid) ? `<span class="unsaved">未保存</span>` : ""}</div></div>`;
+    }).join("");
+  }
+
+  function requestsPanel() {
+    const rs = Object.entries(S.requests).map(([id, r]) => ({ ...r, id })).sort((a, b) => (b.created || 0) - (a.created || 0));
+    const st = { new: ["warn", "等 Claude 处理"], done: ["ok", "已处理"], not_found: ["bad", "没找到素材"] };
+    return `<h2>补充故事</h2><p class="muted">想加一段脚本里没有的故事，比如"加一段我们半路迷路的事"。写在这里，回到对话里告诉 Claude 去处理。</p>
+      <div class="form"><textarea id="req-new" rows="3" placeholder="想补充什么故事"></textarea>
+        <div class="row"><button class="primary" data-act="add-req" ${dis()}>提交</button>${S.reqError ? `<span class="unsaved">没提交上，网络恢复后再点一次</span>` : ""}</div></div>
+      ${rs.map(r => { const [c, l] = st[r.status] || st.new; return `<div class="card"><div class="row" style="justify-content:space-between"><span>${esc(r.text)}</span><span class="state ${c}">${l}</span></div>${r.reply ? `<p class="tips">Claude：${esc(r.reply)}</p>` : ""}</div>`; }).join("")}`;
+  }
+
+  // ---------- 操作 ----------
+  const val = id => { const el = document.getElementById(id); return el ? el.value : ""; };
+  function nextShotId() {
+    const n = Math.max(0, ...Object.keys(S.shots).map(k => +(k.match(/^S(\d+)$/) || [, 0])[1]));
+    return "S" + String(n + 1).padStart(2, "0");
+  }
+  function nextChId() {
+    const n = Math.max(0, ...Object.keys(S.chapters).map(k => +(k.match(/^ch(\d+)$/) || [, 0])[1]));
+    return "ch" + (n + 1);
+  }
+  function swap(list, idx, d, col) {
+    const a = list[idx], b = list[idx + d];
+    if (!a || !b) return;
+    const ao = a.order ?? idx + 1, bo = b.order ?? idx + d + 1;
+    write(`${col}/${a.id}`, { order: bo === ao ? ao + d : bo });
+    write(`${col}/${b.id}`, { order: ao });
+  }
+
+  const actions = {
+    view: el => { S.view = el.dataset.v; render(); },
+    toggle: el => { const c = el.dataset.ch; S.open[c] = S.open[c] === false; render(); },
+    done: el => write("shots/" + el.dataset.id, { done: el.checked }),
+    edit: el => { S.editing = el.dataset.id; S.armDelete = null; render(); },
+    "cancel-edit": () => { clearDrafts(/^f-/); S.editing = null; S.armDelete = null; render(); },
+    "save-shot": el => {
+      const id = el.dataset.id, s = S.shots[id], patch = {};
+      const next = { desc: val(`f-desc-${id}`).trim(), size: val(`f-size-${id}`).trim(), duration: num(val(`f-duration-${id}`)),
+        kind: val(`f-kind-${id}`), talk: val(`f-talk-${id}`).trim(), tips: val(`f-tips-${id}`).trim() };
+      for (const k of USER_FIELDS) if ((next[k] ?? "") !== (s[k] ?? "")) patch[k] = next[k];
+      if (Object.keys(patch).length) {
+        patch.edited_by_user = [...new Set([...(s.edited_by_user || []), ...Object.keys(patch)])];
+        write("shots/" + id, patch);
+      }
+      S.editing = null; clearDrafts(new RegExp(`^f-\\w+-${id}$`)); render();
+    },
+    "move-shot": el => { const s = S.shots[el.dataset.id]; const list = shotsOf(s.chapter); swap(list, list.findIndex(x => x.id === el.dataset.id), +el.dataset.d, "shots"); },
+    "del-shot": el => {
+      const id = el.dataset.id;
+      if (S.armDelete !== "shot:" + id) { S.armDelete = "shot:" + id; render(); return; }
+      write("shots/" + id, null, "delete");
+      if (S.matches[id]) write("matches/" + id, null, "delete");
+      S.editing = null; S.armDelete = null;
+    },
+    "add-shot": el => {
+      const ch = el.dataset.ch, id = nextShotId();
+      const order = Math.max(0, ...shotsOf(ch).map(s => s.order ?? 0)) + 1;
+      write("shots/" + id, { chapter: ch, order, kind: "visual", desc: "新镜头", size: "", duration: 5, talk: "", tips: "",
+        done: false, note: "", edited_by_user: [...USER_FIELDS], created_by: "user" }, "set");
+      S.editing = id; S.open[ch] = true;
+    },
+    "edit-ch": el => { S.editingCh = el.dataset.ch; S.armDelete = null; render(); },
+    "cancel-ch": () => { clearDrafts(/^ch[tfr]-/); S.editingCh = null; S.armDelete = null; render(); },
+    "save-ch": el => {
+      const id = el.dataset.ch;
+      write("chapters/" + id, { title: val(`cht-${id}`).trim() || S.chapters[id].title, function: val(`chf-${id}`), rhythm: val(`chr-${id}`) });
+      S.editingCh = null; clearDrafts(new RegExp(`^ch[tfr]-${id}$`)); render();
+    },
+    "move-ch": el => { const list = chapters(); swap(list, list.findIndex(c => c.id === el.dataset.ch), +el.dataset.d, "chapters"); },
+    "del-ch": el => {
+      const id = el.dataset.ch;
+      if (S.armDelete !== "ch:" + id) { S.armDelete = "ch:" + id; render(); return; }
+      write("chapters/" + id, null, "delete"); S.editingCh = null; S.armDelete = null;
+    },
+    "add-ch": () => {
+      const id = nextChId(), order = Math.max(0, ...chapters().map(c => c.order ?? 0)) + 1;
+      write("chapters/" + id, { order, title: "新的一章", function: "setup", rhythm: "" }, "set");
+      S.editingCh = id;
+    },
+    sel: el => { S.sel = el.dataset.id; render(); },
+    confirm: el => write("matches/" + el.dataset.id, { confirmed: true }),
+    unconfirm: el => write("matches/" + el.dataset.id, { confirmed: false }),
+    unmatch: el => write("matches/" + el.dataset.id, null, "delete"),
+    reassign: el => {
+      const id = el.dataset.id, clip = val(`m-clip-${id}`), at = num(val(`m-at-${id}`));
+      const dur = S.clips[clip] && num(S.clips[clip].duration);
+      if (!clip || at === null || at < 0 || (dur !== null && dur !== undefined && at > dur)) {
+        const box = document.getElementById(`m-at-${id}`); if (box) { box.setCustomValidity("请选素材并填素材内的秒数"); box.reportValidity(); box.setCustomValidity(""); }
+        return;
+      }
+      clearDrafts(new RegExp(`^m-(clip|at)-${id}$`));
+      const data = { clip_id: clip, at, start: null, end: null, confirmed: true, by: "user" };
+      write("matches/" + id, S.matches[id] ? data : { ...data, confidence: null, reason: "" }, S.matches[id] ? "update" : "set");
+    },
+    extra: el => write("extras/" + el.dataset.id, { accepted: el.dataset.v === "1" }),
+    "add-req": () => {
+      const text = val("req-new").trim(); if (!text || ro()) return;
+      S.reqError = false;
+      S.db.collection("requests").add({ text, status: "new", reply: "", created: Date.now() })
+        .then(() => { delete S.drafts["req-new"]; const el = document.getElementById("req-new"); if (el) el.value = ""; })
+        .catch(() => { S.reqError = true; render(); });
+    },
+  };
+
+  app.addEventListener("click", e => {
+    const el = e.target.closest("[data-act]");
+    if (!el || el.dataset.act === "done" || el.dataset.act === "note") return;
+    if (el.dataset.act !== "toggle" && el.dataset.act !== "view" && el.dataset.act !== "sel") retryFailed();
+    actions[el.dataset.act] && actions[el.dataset.act](el);
+  });
+  app.addEventListener("keydown", e => {
+    const el = e.target.closest('[data-act="toggle"]');
+    if (el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); actions.toggle(el); }
+  });
+  const noteTimers = {};
+  function saveNote(id) {
+    clearTimeout(noteTimers[id]);
+    const v = (S.drafts["note-" + id] ?? "").trim();
+    if (S.shots[id] && v !== (S.shots[id].note || "")) { retryFailed(); write("shots/" + id, { note: v }); }
+  }
+  app.addEventListener("input", e => {
+    const el = e.target;
+    if (!el.id || el.dataset.act === "done") return;
+    S.drafts[el.id] = el.value;
+    if (el.dataset.act === "note") { clearTimeout(noteTimers[el.dataset.id]); noteTimers[el.dataset.id] = setTimeout(() => saveNote(el.dataset.id), 800); }
+  });
+  app.addEventListener("change", e => {
+    const el = e.target;
+    if (el.dataset.act === "done") { retryFailed(); actions.done(el); return; }
+    if (el.id) S.drafts[el.id] = el.value;
+    if (el.dataset.act === "note") saveNote(el.dataset.id);
+  });
+
+  // ---------- 启动 ----------
+  render();
+  const timer = setTimeout(() => { if (S.status === "loading") { S.status = "timeout"; render(); } }, 10000);
+  if (!window.claude || !window.claude.use) { clearTimeout(timer); S.status = "nodb"; render(); return; }
+  window.claude.use("db").then(async db => {
+    if (!db) { clearTimeout(timer); S.status = "nodb"; render(); return; }
+    S.db = db;
+    try { const u = await window.claude.use("user"); if (u && (await u.can("data.write")) === false) S.canWrite = false; } catch (_) {}
+    for (const col of COLS) {
+      db.collection(col).onSnapshot(snap => {
+        const m = {};
+        snap.docs.forEach(d => { if (d.exists) m[d.id] = d.data(); });
+        if (col === "plan") S.meta = m.meta || null; else S[col] = m;
+        if (!snap.metadata.fromCache) S.loaded.add(col);
+        if (S.loaded.size === COLS.length && (S.status === "loading" || S.status === "timeout")) { S.status = "ready"; clearTimeout(timer); }
+        render();
+      }, () => { clearTimeout(timer); S.status = "error"; render(); });
+    }
+  });
+})();
+</script>
