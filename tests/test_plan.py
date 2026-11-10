@@ -333,3 +333,11 @@ def test_default_budget_values():
     def clip(sec):
         return Clip({"clip_id": "c", "path": "/x", "name": "x", "shot_time": "", "duration_s": sec}, [], [])
     assert [shots_for_clip(clip(s)) for s in (5, 60, 300, 3600)] == [1, 1, 3, 5]
+
+
+def test_pin_fills_short_clip_when_only_one_start_fits():
+    """镜头占满短素材时只有 a=EDGE 一个可行入点，平移网格不能错过它（实测：11.1s 素材 pin@5s 被跳过）。"""
+    from plan import EDGE, place_pin, Clip
+    c = Clip({"clip_id": "c", "path": "/x", "name": "x", "shot_time": "", "duration_s": 11.1}, [], [])
+    d = c.longest_free()
+    assert place_pin(c, 5 * US, d) == (EDGE, d)

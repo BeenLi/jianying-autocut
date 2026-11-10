@@ -238,9 +238,10 @@ def place_pin(c, at, d):
     """以 at 为中心放一个长度 d 的窗口；不可行就每 0.5s 向两侧平移，始终包含 at。"""
     d = min(d, c.usable)
     base = at - d // 2
+    lo, hi = EDGE, c.dur - EDGE - d
     for k in range(0, 2 * d // STEP + 1):
         off = (k + 1) // 2 * STEP * (1 if k % 2 else -1)
-        a = base + off
+        a = min(max(base + off, lo), hi)   # 夹回可行范围：镜头占满短素材时只有 a=EDGE 一个入点，步长网格会错过它
         if a <= at < a + d and c.feasible(a, d):
             return a, d
     return None
