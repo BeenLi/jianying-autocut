@@ -22,6 +22,7 @@
   --ok: #6cc391; --ok-bg: #173225; --warn: #e2b04f; --warn-bg: #362a12; --bad: #ee8077; --bad-bg: #3a1c1a;
   color-scheme: dark }
 
+*, *::before, *::after { box-sizing: border-box; }
 body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.55;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
   padding-block: 12px 48px; }
@@ -269,7 +270,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     const id = esc(s.id);
     return `<div class="form">
       <label>画面描述<textarea id="f-desc-${id}" rows="2">${esc(s.desc)}</textarea></label>
-      <div class="two"><label>景别<input type="text" id="f-size-${id}" list="sizes" value="${esc(s.size || "")}"></label>
+      <div class="two"><label>景别<select id="f-size-${id}"><option value="">不指定</option>${[...SIZES, ...(s.size && !SIZES.includes(s.size) ? [s.size] : [])].map(x => `<option value="${esc(x)}" ${x === s.size ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
         <label>建议时长（秒）<input type="number" min="1" id="f-duration-${id}" value="${esc(s.duration ?? "")}"></label></div>
       <label>类型<select id="f-kind-${id}"><option value="visual" ${s.kind !== "talk" ? "selected" : ""}>画面</option><option value="talk" ${s.kind === "talk" ? "selected" : ""}>出镜口播</option></select></label>
       <label>口播要点（口播镜头才填，约 4 字/秒）<textarea id="f-talk-${id}" rows="2">${esc(s.talk || "")}</textarea></label>
@@ -278,8 +279,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         <button data-act="move-shot" data-id="${id}" data-d="-1" ${k === 0 ? "disabled" : ""}>上移</button>
         <button data-act="move-shot" data-id="${id}" data-d="1" ${k === n - 1 ? "disabled" : ""}>下移</button>
         <button class="danger" data-act="del-shot" data-id="${id}">${S.armDelete === "shot:" + s.id ? "确认删除" : "删除镜头"}</button>
-        <button data-act="cancel-edit">取消</button></div>
-      <datalist id="sizes">${SIZES.map(x => `<option value="${x}">`).join("")}</datalist></div>`;
+        <button data-act="cancel-edit">取消</button></div></div>`;
   }
 
   // ---------- 剪辑视图 ----------
