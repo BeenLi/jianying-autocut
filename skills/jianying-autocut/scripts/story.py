@@ -87,14 +87,18 @@ def apply_exclude(plan, spec):
 
 def validate(plan, inv_ids):
     errs = []
-    seen = set()
+    homes = {}      # 素材 → 放进了哪些 pool=own 的章节
     for ch in plan.get("chapters", []):
         for c in ch.get("clip_ids", []):
             if c not in inv_ids:
                 errs.append(f"章节 {ch.get('id')} 引用了不存在的素材 {c}")
-            if c in seen and ch.get("pool") != "all":
-                errs.append(f"素材 {c} 出现在多个章节")
-            seen.add(c)
+            if ch.get("pool") != "all":
+                homes.setdefault(c, []).append(ch)
+    # 一段素材可以进多章（match.py 会这样生成），但每章都得 pin 住它，否则章节间会抢同一段素材
+    for c, chs in homes.items():
+        if len(chs) > 1 and any(c not in {p.get("clip_id") for p in ch.get("pins", [])} for ch in chs):
+            errs.append(f"素材 {c} 出现在多个章节，每一章都要给它 pin")
+    for ch in plan.get("chapters", []):
         for p in ch.get("pins", []):
             if p.get("clip_id") not in inv_ids:
                 errs.append(f"章节 {ch.get('id')} 的 pin 引用了不存在的素材 {p.get('clip_id')}")

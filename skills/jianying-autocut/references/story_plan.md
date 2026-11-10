@@ -37,7 +37,7 @@
 | 字段 | 含义 |
 |---|---|
 | `function` | `hook / setup / turn / escalation / payoff`。`hook` 章排到成片最前（冷开场），其余按章节顺序 |
-| `clip_ids` | 本章可用的素材（clip_id 见 `inventory.csv`，联系表上也标了）。一段素材只放进一章 |
+| `clip_ids` | 本章可用的素材（clip_id 见 `inventory.csv`，联系表上也标了）。一段素材通常只放进一章；放进多章时每章都要给它 pin（match.py 生成的故事会这样） |
 | `pool` | `own`（默认）只从本章素材取；`all` 可从全部素材取，适合开场钩子 |
 | `rhythm` | 可选，`slow / normal / fast / montage`，本章镜头快慢，怎么选见 SKILL.md「精剪」；精简模式下不写就按 `function` 取默认值 |
 | `pins` | 必须出现的瞬间：素材内秒数，可以写多个。精简模式下，本章有 pin 的素材只留 pin，所以这里决定了长素材留下什么。所有章节的 pins 会先于普通镜头放置，高光不会被别的章节占走 |

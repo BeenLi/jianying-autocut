@@ -350,3 +350,14 @@ def test_new_shots_drop_stale_beat_backup(tmp_path):
     stale.write_text("old")
     write_shots(str(tmp_path), [])
     assert (tmp_path / "shots.csv").exists() and not stale.exists()
+
+
+def test_fixed_mode_shared_clip_shots_do_not_overlap(tmp_path):
+    # match.py 会把一段长素材 pin 进多章：两章共用同一个 Clip，占用区间共享，镜头不会重叠
+    w = _work(tmp_path, [("c001", 120, 0), ("c002", 60, 0)],
+              [_ch("a", ["c001"], pins=[{"clip_id": "c001", "at": 20.0}]),
+               _ch("b", ["c001", "c002"], pins=[{"clip_id": "c001", "at": 90.0}])])
+    rows, _, _ = plan(w, 60 * US, seed=1)
+    spans = sorted((r["in_us"], r["in_us"] + r["dur_us"]) for r in rows if r["name"] == "c001.mp4")
+    assert len(spans) >= 2
+    assert all(a_end <= b_start for (_, a_end), (b_start, _) in zip(spans, spans[1:]))
