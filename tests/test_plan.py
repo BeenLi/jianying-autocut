@@ -341,3 +341,12 @@ def test_pin_fills_short_clip_when_only_one_start_fits():
     c = Clip({"clip_id": "c", "path": "/x", "name": "x", "shot_time": "", "duration_s": 11.1}, [], [])
     d = c.longest_free()
     assert place_pin(c, 5 * US, d) == (EDGE, d)
+
+
+def test_new_shots_drop_stale_beat_backup(tmp_path):
+    """beatsync 总从 shots.prebeat.csv 读；重跑分镜后旧备份不删，卡点会悄悄用回旧分镜（实测）。"""
+    from plan import write_shots
+    stale = tmp_path / "shots.prebeat.csv"
+    stale.write_text("old")
+    write_shots(str(tmp_path), [])
+    assert (tmp_path / "shots.csv").exists() and not stale.exists()

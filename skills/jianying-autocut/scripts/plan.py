@@ -558,6 +558,16 @@ def plan_condense(work, per_clip=None, min_score=MIN_KEEP_SCORE, seed=7):
     return rows, summary, dropped
 
 
+def write_shots(work, rows):
+    """写 shots.csv，并删掉上一版的卡点备份：beatsync 从备份读，不删就会用回旧分镜。"""
+    out = os.path.join(work, "shots.csv")
+    write_csv(out, rows, FIELDS)
+    stale = os.path.join(work, "shots.prebeat.csv")
+    if os.path.exists(stale):
+        os.remove(stale)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--work", required=True)
@@ -597,9 +607,7 @@ def main():
     if args.dry_run:
         print("\n[dry-run] 未写文件。满意就去掉 --dry-run 重跑；想换一版用 --seed。")
         return
-    out = os.path.join(args.work, "shots.csv")
-    write_csv(out, rows, FIELDS)
-    print(f"→ {out}")
+    print(f"→ {write_shots(args.work, rows)}")
 
 
 if __name__ == "__main__":

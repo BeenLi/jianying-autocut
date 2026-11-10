@@ -142,7 +142,7 @@ def _retime_section(g_rows, old_lo, old_hi, t0, new_len, beats, bars, clip_us):
     return g_rows, prev_end
 
 
-def retime(rows, songs, starts, clip_us, anchors, gain=0.3, fade=1.5):
+def retime(rows, songs, starts, clip_us, anchors, gain=0.2, fade=1.5):
     """rows（带 chapter_no）→ (卡点后的 rows, bgm 计划)。starts：每首歌从第几章开始；
     anchors：{章号: 歌内微秒}。歌不够长或 anchor 不合理时抛 ValueError。"""
     spans = chapter_spans(rows)
@@ -228,7 +228,7 @@ def main():
     ap.add_argument("--analyze", action="store_true", help="只分析歌（BPM、能量段落），写 bgm_analysis.json")
     ap.add_argument("--split", default="", help="第 2、3… 首歌从第几章开始（成片顺序），如 3,5")
     ap.add_argument("--anchor", action="append", default=[], help="章:歌内秒，让这一章从歌的这一刻开始，可多次")
-    ap.add_argument("--gain", type=float, default=0.3)
+    ap.add_argument("--gain", type=float, default=0.2)
     ap.add_argument("--fade", type=float, default=1.5)
     args = ap.parse_args()
     W = args.work
