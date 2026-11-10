@@ -1,9 +1,8 @@
-"""各步脚本共用的小工具：路径、CSV 读写、本机剪映版本探测、MiMo 报错归类。"""
+"""各步脚本共用的小工具：路径、CSV 读写、本机剪映版本探测。"""
 import csv
 import json
 import os
 import plistlib
-import re
 import shutil
 import subprocess
 
@@ -13,15 +12,6 @@ VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".mts", ".m2ts", ".mxf"}
 JIANYING_APP = "/Applications/VideoFusion-macOS.app"
 DRAFTS_DIR = os.path.expanduser(
     "~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft")
-SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# video-understanding 收录在仓库 vendor/ 下（MIT，来自 zenstory-ai/video-recap-skills）
-UNDERSTAND_CLI = os.path.join(SKILL_DIR, "vendor", "video-understanding", "scripts", "understand.py")
-
-RECHARGE_HINT = (
-    "MiMo 不可用（未配置 key、余额不足或已欠费）。\n"
-    "  · 请到小米 MiMo 开放平台控制台充值，或获取 key 后执行 export MIMO_API_KEY=…\n"
-    "  · 不想用 MiMo：加 --no-understanding，改由 Claude 看 contact/ 联系表写故事脚本")
-_RECHARGE_WORDS = re.compile(r"余额|欠费|充值|insufficient|balance|quota|credit|arrear|payment", re.I)
 
 
 def have(cmd):
@@ -31,24 +21,6 @@ def have(cmd):
 def default_work(folder):
     """工作目录默认放在素材目录下，跟着素材走。"""
     return os.path.join(os.path.abspath(os.path.expanduser(folder)), "_autocut")
-
-
-def classify_mimo_error(text, status):
-    """把 MiMo 报错归成五类：recharge / bad_key / bad_model / rate_limit / other。
-
-    余额判断优先：有些网关欠费时也回 401/403，但文本里会带「余额 / balance」。
-    """
-    text = text or ""
-    if status == 402 or _RECHARGE_WORDS.search(text):
-        return "recharge"
-    if re.search(r"unsupported model|model.*not (found|exist|support)", text, re.I):
-        return "bad_model"
-    # 日志尾巴里有行号、场景号，不能见 "401" 就判 key 无效：只认 HTTP 状态的写法
-    if status == 401 or re.search(r"HTTP(?: Error)?:? ?401\b|\(401\)|\b401 Unauthorized|Unauthorized", text):
-        return "bad_key"
-    if status == 429 or re.search(r"429|too many requests|rate limit|限流", text, re.I):
-        return "rate_limit"
-    return "other"
 
 
 def write_csv(path, rows, fields):

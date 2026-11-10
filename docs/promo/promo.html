@@ -116,7 +116,7 @@
   <div id="bad"></div></div>
 
 <div id="s4" class="scene"><div class="dots"></div>
-  <div class="step"><div class="no">03 · 小米 MiMo 看懂素材</div><h2>拼成一条 720p 代理长片，只理解一次</h2><p>场景切分 · 逐场景画面描述（VLM）· 语音转写（ASR）· 逐帧判断画面方向</p></div>
+  <div class="step"><div class="no">03 · Claude 看画面，Whisper 听语音</div><h2>读联系表写描述，语音在本机转写</h2><p>逐段画面描述 · 本地 Whisper 语音转写 · 标出歪倒和倒装的画面</p></div>
   <div class="cards" id="cards"></div><div class="alert" id="alert"></div></div>
 
 <div id="s5" class="scene"><div class="dots"></div>
@@ -164,8 +164,8 @@ D.bad.forEach(b => { const d = document.createElement('div'); d.className = 'f';
   d.innerHTML = `<div class="box"></div><div class="lab">${b.label} · ${b.id}</div>`; bad.appendChild(d); });
 const cards = $('#cards');
 D.captions.forEach(c => { const d = document.createElement('div'); d.className = 'card';
-  d.innerHTML = `<div class="img" style="background-image:url(${A(c.img)})"></div><div class="cap"><span class="id">${c.id} · MiMo 描述</span><span class="tx"></span></div>`; cards.appendChild(d); });
-$('#alert').innerHTML = `画面方向：c024 抽检 ${D.orient.c024_total} 帧里 <b>${D.orient.c024_bad}</b> 帧歪倒（相机挂着晃拍）→ <b>整段弃用</b>`;
+  d.innerHTML = `<div class="img" style="background-image:url(${A(c.img)})"></div><div class="cap"><span class="id">${c.id} · Claude 描述</span><span class="tx"></span></div>`; cards.appendChild(d); });
+$('#alert').innerHTML = `画面方向：c024 相机挂着晃拍，<b>大半画面歪倒</b> → <b>整段弃用</b>`;
 const chs = $('#chapters');
 D.chapters.forEach(c => { const d = document.createElement('div'); d.className = 'ch'; const col = chColor(c.no, false);
   let lanes = '';
