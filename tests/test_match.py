@@ -166,3 +166,14 @@ def test_main_refuses_on_validation_errors(tmp_path):
     m["matches"]["S02"]["confirmed"] = False
     _write_work(tmp_path, sp, m, d)
     assert main(["--work", str(tmp_path)]) == 1 and not (tmp_path / "story_plan.json").exists()
+
+
+def test_talk_longer_than_chapter_rhythm_is_reported():     # Final review I3
+    sp, m, _ = _inputs()
+    sp["chapters"][1]["rhythm"] = "fast"                     # fast 最长镜头 9s
+    m["matches"]["S03"].update(start=70, at=75, end=82)      # 整句 12s
+    _, rep = build_story_plan(sp, m)
+    assert rep["long_talk"] == [("S03", 12.0, 9)]
+    sp["chapters"][1]["rhythm"] = "slow"                     # slow 最长 18s，放得下
+    _, rep = build_story_plan(sp, m)
+    assert rep["long_talk"] == []

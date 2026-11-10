@@ -98,7 +98,7 @@ def build_story_plan(shoot_plan, matches):
     shots = sorted(shoot_plan.get("shots", []), key=lambda s: (s.get("order", 0), s["id"]))
     confirmed = {sid: m for sid, m in matches.get("matches", {}).items() if m.get("confirmed") is True}
     extras = matches.get("extras", {})
-    report = {"missing": {}, "dropped_chapters": [], "rejected_extras": 0, "merged_pins": [],
+    report = {"missing": {}, "dropped_chapters": [], "rejected_extras": 0, "merged_pins": [], "long_talk": [],
               "pending_extras": [cid for cid, x in extras.items() if x.get("accepted") is None]}
     report["rejected_extras"] = sum(1 for x in extras.values() if x.get("accepted") is False)
 
@@ -109,7 +109,13 @@ def build_story_plan(shoot_plan, matches):
             if s.get("chapter") != ch["id"]:
                 continue
             if s["id"] in confirmed:
-                wanted.append((confirmed[s["id"]]["clip_id"], to_seconds(confirmed[s["id"]]["at"])))
+                m = confirmed[s["id"]]
+                wanted.append((m["clip_id"], to_seconds(m["at"])))
+                # pin 只带一个时间点，镜头长度由节奏决定：整句比本章最长镜头还长，必然被剪断
+                start, end = to_seconds(m.get("start")), to_seconds(m.get("end"))
+                longest = max(hi for _, _, hi in RHYTHMS[ch.get("rhythm") or FUNCTION_RHYTHM[ch["function"]]])
+                if start is not None and end is not None and end - start > longest:
+                    report["long_talk"].append((s["id"], round(end - start, 1), longest))
             else:
                 report["missing"].setdefault(ch["id"], []).append(s["id"])
         wanted += [(cid, to_seconds(x["at"])) for cid, x in extras.items()
@@ -146,6 +152,8 @@ def _print_report(shoot_plan, story, report, durations, out_path):
         print(f"计划外素材已拒绝 {report['rejected_extras']} 段")
     for cid, kept, dropped in report["merged_pins"]:
         print(f"合并了相差不到 {MERGE_S:g} 秒的 pin：{cid} @{kept:g} / {dropped:g}")
+    for sid, length, longest in report["long_talk"]:
+        print(f"⚠ 口播 {sid} 整句 {length:g}s，超过本章节奏最长镜头 {longest}s，会被剪断：把这章 rhythm 改成 slow，或在页面上缩短口播")
     used = {c for ch in story["chapters"] for c in ch["clip_ids"]}
     print(f"未被任何章引用的素材 {len(set(durations) - used)} 段（不进成片）")
     print(f"→ {out_path}")

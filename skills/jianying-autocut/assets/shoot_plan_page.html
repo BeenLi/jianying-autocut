@@ -126,7 +126,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   const USER_FIELDS = ["desc", "size", "duration", "kind", "talk", "tips"];
   const S = { meta: null, chapters: {}, shots: {}, clips: {}, matches: {}, extras: {}, requests: {},
     loaded: new Set(), status: "loading", db: null, canWrite: true, view: null, sel: null,
-    open: {}, editing: null, editingCh: null, armDelete: null, failed: new Map() };
+    open: {}, editing: null, editingCh: null, armDelete: null, failed: new Map(), dead: new Map(), drafts: {} };
 
   const app = document.getElementById("app");
   const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -142,15 +142,27 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
 
   // ---------- 写入：同一文档一次只写一个；失败记下，下次操作时重试 ----------
   const queues = new Map();
+  const PERMANENT = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
   function write(path, data, mode = "update") {
     if (ro()) return Promise.resolve();
+    // 同一文档上一次没保存成功的改动并进这一次，免得后一次覆盖前一次（先勾已拍、再写备注都失败时两样都要留下）
+    const f = S.failed.get(path);
+    if (f) {
+      S.failed.delete(path);
+      if (mode === "update" && f.mode !== "delete") { data = { ...f.data, ...data }; mode = f.mode; }
+    }
     const run = async () => {
       const ref = S.db.doc(path);
       try {
         if (mode === "delete") await ref.delete(); else if (mode === "set") await ref.set(data); else await ref.update(data);
-        S.failed.delete(path);
+        S.dead.delete(path);
       } catch (e) {
-        S.failed.set(path, { data, mode, code: e && e.code });
+        const code = e && e.code;
+        if (PERMANENT.includes(code)) S.dead.set(path, code);   // 文档已被删除、空间满了等：重试也不会成功
+        else {
+          const g = S.failed.get(path);                          // 排队期间又失败了一次：合并，不覆盖
+          S.failed.set(path, g && mode === "update" && g.mode !== "delete" ? { data: { ...g.data, ...data }, mode: g.mode } : { data, mode });
+        }
       }
       render();
     };
@@ -163,12 +175,20 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   }
 
   // ---------- 渲染 ----------
+  // 表单里还没保存的内容记在 S.drafts（按元素 id），每次重绘后放回去：数据库推送新快照时不丢用户正在填的东西
   function render() {
     const a = document.activeElement;
-    const keep = a && a.id && (a.tagName === "TEXTAREA" || a.tagName === "INPUT") ? { id: a.id, v: a.value, s: a.selectionStart, e: a.selectionEnd } : null;
+    const keep = a && a.id && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) ? { id: a.id, s: a.selectionStart, e: a.selectionEnd } : null;
     app.innerHTML = header() + body();
-    if (keep) { const el = document.getElementById(keep.id); if (el) { el.value = keep.v; el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch (_) {} } }
+    for (const [id, v] of Object.entries(S.drafts)) {
+      const m = id.match(/^note-(.+)$/);
+      if (m && S.shots[m[1]] && (S.shots[m[1]].note || "") === v.trim()) { delete S.drafts[id]; continue; }   // 已经存上了
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    }
+    if (keep) { const el = document.getElementById(keep.id); if (el) { el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch (_) {} } }
   }
+  const clearDrafts = re => { for (const id of Object.keys(S.drafts)) if (re.test(id)) delete S.drafts[id]; };
 
   function header() {
     const m = S.meta || {};
@@ -181,6 +201,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     else if (S.status === "error") banner = "数据连接断了，刷新页面重新连接。";
     else if (S.db && !S.canWrite) banner = "你只有查看权限，改动不会保存。";
     if (S.failed.size) banner += `${banner ? " " : ""}有 ${S.failed.size} 处改动没保存，下次操作时会自动重试。`;
+    if (S.dead.size) banner += `${banner ? " " : ""}有 ${S.dead.size} 处改动保存不了（内容可能已在别处被删除，或空间已满），刷新页面看最新内容。`;
     return `<header class="head">
       <div class="head-top">
         <h1>${esc(m.title || "拍摄脚本")}</h1>
@@ -249,7 +270,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   }
 
   function shotCard(s, k, n) {
-    const fail = S.failed.has("shots/" + s.id);
+    const fail = (S.failed.has("shots/" + s.id) || S.dead.has("shots/" + s.id));
     const tags = [s.size, s.duration ? `${s.duration}s` : ""].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join("") +
       (s.kind === "talk" ? `<span class="tag talk">口播</span>` : "");
     return `<li class="shot ${s.done ? "done" : ""}">
@@ -279,7 +300,8 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         <button data-act="move-shot" data-id="${id}" data-d="-1" ${k === 0 ? "disabled" : ""}>上移</button>
         <button data-act="move-shot" data-id="${id}" data-d="1" ${k === n - 1 ? "disabled" : ""}>下移</button>
         <button class="danger" data-act="del-shot" data-id="${id}">${S.armDelete === "shot:" + s.id ? "确认删除" : "删除镜头"}</button>
-        <button data-act="cancel-edit">取消</button></div></div>`;
+        <button data-act="cancel-edit">取消</button></div>
+      <p class="muted" style="font-size:.82rem">调顺序只改这份脚本；剪成片时同一章的镜头按拍摄时间排，钩子章放在最前。</p></div>`;
   }
 
   // ---------- 剪辑视图 ----------
@@ -328,7 +350,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     const m = S.matches[s.id];
     const [cls, label] = shotState(s);
     const id = esc(s.id);
-    const fail = S.failed.has("matches/" + s.id);
+    const fail = (S.failed.has("matches/" + s.id) || S.dead.has("matches/" + s.id));
     const assign = `<div class="form">
       <div class="two"><label>换成素材<select id="m-clip-${id}"><option value="">选素材</option>${clipOptions(m && m.clip_id)}</select></label>
         <label>素材内第几秒（如 15 或 1:05）<input type="text" id="m-at-${id}" value="${m ? esc(m.at) : ""}"></label></div>
@@ -342,7 +364,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
           ${m.reason ? `<dt>理由</dt><dd>${esc(m.reason)}</dd>` : ""}
           ${S.clips[m.clip_id] && S.clips[m.clip_id].desc ? `<dt>画面</dt><dd>${esc(S.clips[m.clip_id].desc)}</dd>` : ""}</dl>
         <div class="row">${m.confirmed === true ? `<button data-act="unconfirm" data-id="${id}" ${dis()}>取消确认</button>` : `<button class="primary" data-act="confirm" data-id="${id}" ${dis()}>确认</button>`}${fail ? `<span class="unsaved">未保存</span>` : ""}</div>`
-        : `<p>还没有找到对应的素材。留着不管的话，这一章会用其他素材补；整章都没有素材就会被删掉。</p>`}
+        : `<p>还没有找到对应的素材，成片里这一章就少这个镜头。想补的话，在下面指定一段素材，或去「计划外素材」采纳 Claude 建议的片段。整章都没有素材会被删掉。</p>`}
       ${assign}`;
   }
 
@@ -395,7 +417,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     toggle: el => { const c = el.dataset.ch; S.open[c] = S.open[c] === false; render(); },
     done: el => write("shots/" + el.dataset.id, { done: el.checked }),
     edit: el => { S.editing = el.dataset.id; S.armDelete = null; render(); },
-    "cancel-edit": () => { S.editing = null; S.armDelete = null; render(); },
+    "cancel-edit": () => { clearDrafts(/^f-/); S.editing = null; S.armDelete = null; render(); },
     "save-shot": el => {
       const id = el.dataset.id, s = S.shots[id], patch = {};
       const next = { desc: val(`f-desc-${id}`).trim(), size: val(`f-size-${id}`).trim(), duration: num(val(`f-duration-${id}`)),
@@ -405,7 +427,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         patch.edited_by_user = [...new Set([...(s.edited_by_user || []), ...Object.keys(patch)])];
         write("shots/" + id, patch);
       }
-      S.editing = null; render();
+      S.editing = null; clearDrafts(new RegExp(`^f-\\w+-${id}$`)); render();
     },
     "move-shot": el => { const s = S.shots[el.dataset.id]; const list = shotsOf(s.chapter); swap(list, list.findIndex(x => x.id === el.dataset.id), +el.dataset.d, "shots"); },
     "del-shot": el => {
@@ -423,11 +445,11 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       S.editing = id; S.open[ch] = true;
     },
     "edit-ch": el => { S.editingCh = el.dataset.ch; S.armDelete = null; render(); },
-    "cancel-ch": () => { S.editingCh = null; S.armDelete = null; render(); },
+    "cancel-ch": () => { clearDrafts(/^ch[tfr]-/); S.editingCh = null; S.armDelete = null; render(); },
     "save-ch": el => {
       const id = el.dataset.ch;
       write("chapters/" + id, { title: val(`cht-${id}`).trim() || S.chapters[id].title, function: val(`chf-${id}`), rhythm: val(`chr-${id}`) });
-      S.editingCh = null; render();
+      S.editingCh = null; clearDrafts(new RegExp(`^ch[tfr]-${id}$`)); render();
     },
     "move-ch": el => { const list = chapters(); swap(list, list.findIndex(c => c.id === el.dataset.ch), +el.dataset.d, "chapters"); },
     "del-ch": el => {
@@ -451,6 +473,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         const box = document.getElementById(`m-at-${id}`); if (box) { box.setCustomValidity("请选素材并填素材内的秒数"); box.reportValidity(); box.setCustomValidity(""); }
         return;
       }
+      clearDrafts(new RegExp(`^m-(clip|at)-${id}$`));
       const data = { clip_id: clip, at, start: null, end: null, confirmed: true, by: "user" };
       write("matches/" + id, S.matches[id] ? data : { ...data, confidence: null, reason: "" }, S.matches[id] ? "update" : "set");
     },
@@ -459,7 +482,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       const text = val("req-new").trim(); if (!text || ro()) return;
       S.reqError = false;
       S.db.collection("requests").add({ text, status: "new", reply: "", created: Date.now() })
-        .then(() => { const el = document.getElementById("req-new"); if (el) el.value = ""; })
+        .then(() => { delete S.drafts["req-new"]; const el = document.getElementById("req-new"); if (el) el.value = ""; })
         .catch(() => { S.reqError = true; render(); });
     },
   };
@@ -474,10 +497,23 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     const el = e.target.closest('[data-act="toggle"]');
     if (el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); actions.toggle(el); }
   });
+  const noteTimers = {};
+  function saveNote(id) {
+    clearTimeout(noteTimers[id]);
+    const v = (S.drafts["note-" + id] ?? "").trim();
+    if (S.shots[id] && v !== (S.shots[id].note || "")) { retryFailed(); write("shots/" + id, { note: v }); }
+  }
+  app.addEventListener("input", e => {
+    const el = e.target;
+    if (!el.id || el.dataset.act === "done") return;
+    S.drafts[el.id] = el.value;
+    if (el.dataset.act === "note") { clearTimeout(noteTimers[el.dataset.id]); noteTimers[el.dataset.id] = setTimeout(() => saveNote(el.dataset.id), 800); }
+  });
   app.addEventListener("change", e => {
     const el = e.target;
-    if (el.dataset.act === "done") { retryFailed(); actions.done(el); }
-    if (el.dataset.act === "note") { retryFailed(); const v = el.value.trim(); if (v !== (S.shots[el.dataset.id].note || "")) write("shots/" + el.dataset.id, { note: v }); }
+    if (el.dataset.act === "done") { retryFailed(); actions.done(el); return; }
+    if (el.id) S.drafts[el.id] = el.value;
+    if (el.dataset.act === "note") saveNote(el.dataset.id);
   });
 
   // ---------- 启动 ----------
