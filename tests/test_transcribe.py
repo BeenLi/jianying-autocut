@@ -73,3 +73,27 @@ def test_language_and_context_reach_whisper(tmp_path):
     assert kw["language"] == "zh" and "庐山徒步" in kw["initial_prompt"] and kw["vad_filter"] is True
     assert kw["condition_on_previous_text"] is False
     assert os.path.exists(tmp_path / "s.json")
+
+
+# 下面的数值来自枸杞岛实测：真话 no_speech 0.02–0.20，幻听 0.60
+def test_drops_prompt_echo():
+    """Whisper 在安静画面上会把提示词原样念出来（实测：日落素材转出「舟山枸杞岛旅行，带着小狗格桑。」）。"""
+    prompt = "以下是普通话的句子。舟山枸杞岛旅行，带着小狗格桑。"
+    out = speech_from_segments([_seg(0, 5, "舟山枸杞岛旅行，带着小狗格桑。"), _seg(5, 9, "格桑，你妈妈回来了")],
+                               prompt=prompt)
+    assert [s["text"] for s in out] == ["格桑，你妈妈回来了"]
+
+
+def test_drops_lines_past_clip_end():
+    out = speech_from_segments([_seg(1, 3, "到了"), _seg(16, 28, "江湖")], duration=11.1)
+    assert [s["text"] for s in out] == ["到了"]
+
+
+def test_drops_text_repeated_many_times_in_one_clip():
+    segs = [_seg(i, i + 1, "江湖") for i in range(4)] + [_seg(5, 6, "北京")]
+    assert [s["text"] for s in speech_from_segments(segs)] == ["北京"]
+
+
+def test_no_speech_threshold_drops_measured_hallucination():
+    out = speech_from_segments([_seg(0, 5, "一句话", no_speech=0.60), _seg(5, 6, "真话", no_speech=0.20)])
+    assert [s["text"] for s in out] == ["真话"]

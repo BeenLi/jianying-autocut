@@ -18,7 +18,7 @@
 
 https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 
-<p align="center"><sub>60-second demo (in Chinese): 62 raw clips → inventory and scoring → MiMo understands the footage → story → shot plan → JianYing draft. The footage comes from a real hike on Mount Lu, with faces blurred.
+<p align="center"><sub>60-second demo (in Chinese): 62 raw clips → inventory and scoring → Claude reads the frames, Whisper transcribes speech → story → shot plan → JianYing draft. The footage comes from a real hike on Mount Lu, with faces blurred.
 ⬇ <a href="https://github.com/BeenLi/jianying-autocut/raw/main/docs/promo/promo.mp4">Download mp4</a></sub></p>
 
 <details>
@@ -31,7 +31,7 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 ## Workflow
 
 <p align="center">
-  <img alt="jianying-autocut workflow: footage → inventory and scoring → MiMo understands footage → Claude writes the story → shot planning → confirm → build JianYing draft" src="docs/workflow.png" width="100%">
+  <img alt="jianying-autocut workflow: footage → inventory and scoring → Claude describes frames from contact sheets, local Whisper transcribes speech → Claude writes the story → shot planning and beat sync → confirm → build JianYing draft with subtitles" src="docs/workflow.png" width="100%">
 </p>
 
 | Step | What happens | Output (under `_autocut/`) |
@@ -79,7 +79,7 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 
 | File | Contents |
 |---|---|
-| `draft_info.json` | Draft body (plaintext JSON, version matching the local JianYing, `164.0.0` for 11.6): main video track, chapter-title text track, BGM audio track |
+| `draft_info.json` | Draft body (plaintext JSON, version matching the local JianYing, `164.0.0` for 11.6): main video track, chapter-title text track, speech subtitle track (optional), BGM audio track |
 | `draft_meta_info.json` | Draft metadata |
 
 Footage is **not copied** into the draft; only absolute paths are recorded, so don't move or rename footage after building. JianYing encrypts these files itself the first time it opens them.

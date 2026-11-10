@@ -7,6 +7,7 @@
 用法: uv run --script prepare.py <_autocut 目录> <剪映草稿目录> <白名单 clip_id,时间;...>
 
 隐私：只有白名单里的「人工逐秒核对过没有人」的风景画面会清晰出现；其余缩略图一律打成大马赛克。
+画面描述取自第 3 步 Claude 写的 scene_notes.json。
 """
 import csv
 import json
@@ -69,13 +70,12 @@ for name, label in [("c056_0004.00.jpg", "过暗"), ("c024_0204.00.jpg", "歪倒
 frames = list(csv.DictReader(open(f"{W}/frames.csv", encoding="utf-8-sig")))
 _o = json.load(open(f"{W}/orientation.json"))
 orient = _o["clips"]
-c024_tilted = sum(v in ("tilt", "flip") for v in _o["labels"].get("c024", {}).values())
 
-# 4 MiMo 的画面描述（只取白名单风景素材）
-cu = json.load(open(f"{W}/clip_understanding.json"))
+# 4 Claude 的画面描述（只取白名单风景素材，取包含白名单时间的那一条）
+notes = json.load(open(f"{W}/scene_notes.json", encoding="utf-8"))
 captions = []
 for c, t in white:
-    sc = cu.get(c, {}).get("scenes", [])
+    sc = [n for n in notes.get(c, []) if n["start"] <= t < n["end"]] or notes.get(c, [])
     if sc:
         txt = sc[0]["description"]
         captions.append({"id": c, "img": f"hero_{c}_{int(t)}.jpg", "text": txt if len(txt) <= 46 else txt[:45] + "…"})
@@ -137,9 +137,7 @@ data = {
     "inventory": [{"id": r["clip_id"], "name": r["name"], "dur": float(r["duration_s"]),
                    "res": f'{r["width"]}×{r["height"]}', "fps": r["fps"]} for r in inv[10:40]],
     "frames": {"n": len(frames), "bad": sum(int(f["bad"]) for f in frames)},
-    "orient": {"unusable": [c for c, v in orient.items() if v.get("unusable")],
-               "c024_bad": c024_tilted,
-               "c024_total": len([f for f in frames if f["clip_id"] == "c024"])},
+    "orient": {"unusable": [c for c, v in orient.items() if v.get("unusable")]},
     "heroes": heroes, "wall": wall, "bad": bad, "captions": captions,
     "chapters": chapters, "shots": shot_rows, "total": round(sum(r["dur"] for r in shot_rows), 3),
     "draft": {"name": os.path.basename(DRAFT.rstrip("/")), "version": version, "canvas": canvas, "tracks": tracks},

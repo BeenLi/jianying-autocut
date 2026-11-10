@@ -15,7 +15,8 @@
   · 没有 anchor 时每首歌从第一拍开始放（跳过前奏的空白）
   · 成片长度跟镜头走，不会为了放完整首歌去拉伸：最后一首歌与成片相差 15% 以内才放到歌尾，否则停在最近的小节线
     （build.py 会淡出）；歌比这段镜头短 15% 以上就报错，要多给一首歌或少留镜头
-  · 每个切点吸附到最近的拍点，章节交界优先吸附到小节线，镜头至少 1.5s；镜头变长时入点不动，超出素材就把入点往前挪
+  · 每个切点吸附到最近的拍点，章节交界优先吸附到小节线，镜头至少 1.5s；有 speech.json 时，会切在话中间的切点
+    改用 2s 内不切话的拍点（找不到就照旧）；镜头变长时入点不动，超出素材就把入点往前挪
   · 原 shots.csv 备份为 shots.prebeat.csv；build.py --bgm-plan W/bgm_plan.json 使用本步结果
 """
 import argparse
@@ -33,6 +34,8 @@ BAR = 4                   # 每小节拍数
 FIT_TOL = 0.15            # 歌长与镜头总长相差这个比例以内才算「放得下 / 放到歌尾」
 MIN_CONTRAST = 1.3        # 响小节与轻小节的能量比低于这个值，就认为整首歌没有明显起伏
 SCALE_WARN = 0.3          # anchor 让镜头伸缩超过这个比例就警告
+SPEECH_SHIFT = 2 * US     # 为了不切在话中间，切点最多偏离最近拍点这么多
+SPEECH_TOL = int(0.2 * US)  # 句尾 0.2s 内切下去不算切断（Whisper 的句尾时间本来就不准）
 
 
 def load_song(path):
@@ -91,9 +94,11 @@ def chapter_spans(rows):
     return spans
 
 
-def snap_cuts(cuts, grid, lo, hi, strong=(), bars=()):
+def snap_cuts(cuts, grid, lo, hi, strong=(), bars=(), talking=None):
     """cuts：组内各切点（已缩放到新组长）；grid：组内可用拍点。返回吸附后的严格递增切点。
-    strong 里的下标（章节交界）优先吸附到 bars（小节线）。"""
+    strong 里的下标（章节交界）优先吸附到 bars（小节线）。
+    talking(i, 镜头起点, 切点) 为真表示这一刀会切在第 i 个镜头的一句话中间：
+    改用 SPEECH_SHIFT 内最近的不切话的拍点，找不到就仍用最近的拍点。"""
     out, prev = [], lo
     for i, t in enumerate(cuts):
         cands = [g for g in grid if prev + MIN_SHOT <= g <= hi - MIN_SHOT]
@@ -101,9 +106,21 @@ def snap_cuts(cuts, grid, lo, hi, strong=(), bars=()):
             break
         if i in strong:
             cands = [g for g in bars if prev + MIN_SHOT <= g <= hi - MIN_SHOT] or cands
-        out.append(min(cands, key=lambda g: abs(g - t)))
+        cands.sort(key=lambda g: abs(g - t))
+        pick = cands[0]
+        if talking and talking(i, prev, pick):
+            pick = next((g for g in cands if abs(g - t) <= SPEECH_SHIFT and not talking(i, prev, g)), pick)
+        out.append(pick)
         prev = out[-1]
     return out
+
+
+def _talking(rows, speech):
+    """speech：{素材路径: [(句首微秒, 句尾微秒)]}（素材内时间）→ snap_cuts 用的 talking 函数。"""
+    def f(i, start, cut):
+        src = int(rows[i]["in_us"]) + cut - start
+        return any(s0 < src < s1 - SPEECH_TOL for s0, s1 in speech.get(rows[i]["source"], ()))
+    return f if speech else None
 
 
 def music_len(want, bars, avail, last):
@@ -116,13 +133,14 @@ def music_len(want, bars, avail, last):
     return min(usable, key=lambda b: abs(b - want)) if usable else avail
 
 
-def _retime_section(g_rows, old_lo, old_hi, t0, new_len, beats, bars, clip_us):
+def _retime_section(g_rows, old_lo, old_hi, t0, new_len, beats, bars, clip_us, speech=None):
     """把一段镜头摆到 [t0, t0+new_len)，切点吸附到 beats / bars（均为成片时间）。返回实际结束时间。"""
     scale = new_len / (old_hi - old_lo)
     old_cuts = [int(r["start_us"]) + int(r["dur_us"]) for r in g_rows][:-1]
     want = [t0 + round((c - old_lo) * scale) for c in old_cuts]
     strong = {i for i in range(len(want)) if g_rows[i]["chapter_no"] != g_rows[i + 1]["chapter_no"]}
-    cuts = snap_cuts(want, [b for b in beats if t0 < b < t0 + new_len], t0, t0 + new_len, strong, bars)
+    cuts = snap_cuts(want, [b for b in beats if t0 < b < t0 + new_len], t0, t0 + new_len, strong, bars,
+                     _talking(g_rows, speech))
     if len(cuts) < len(want):
         print(f"  ⚠ 拍点不够，丢掉 {len(want) - len(cuts)} 个镜头")
         g_rows = g_rows[:len(cuts)] + [g_rows[-1]]   # 丢中间的，保住本段最后一个镜头（收尾镜头）
@@ -142,9 +160,10 @@ def _retime_section(g_rows, old_lo, old_hi, t0, new_len, beats, bars, clip_us):
     return g_rows, prev_end
 
 
-def retime(rows, songs, starts, clip_us, anchors, gain=0.2, fade=1.5):
+def retime(rows, songs, starts, clip_us, anchors, gain=0.2, fade=1.5, speech=None):
     """rows（带 chapter_no）→ (卡点后的 rows, bgm 计划)。starts：每首歌从第几章开始；
-    anchors：{章号: 歌内微秒}。歌不够长或 anchor 不合理时抛 ValueError。"""
+    anchors：{章号: 歌内微秒}；speech：{素材路径: [(句首, 句尾)]}，切点尽量不切在话中间。
+    歌不够长或 anchor 不合理时抛 ValueError。"""
     spans = chapter_spans(rows)
     n_ch = max(spans)
     ends = [s - 1 for s in starts[1:]] + [n_ch]
@@ -177,7 +196,8 @@ def retime(rows, songs, starts, clip_us, anchors, gain=0.2, fade=1.5):
             offset = t0 - m
             g_rows = [r for r in rows if sc0 <= int(r["chapter_no"]) <= sc1]
             placed, end = _retime_section(g_rows, old_lo, old_hi, t0, new_len,
-                                          [b + offset for b in rel], [b + offset for b in rel_bars], clip_us)
+                                          [b + offset for b in rel], [b + offset for b in rel_bars], clip_us,
+                                          speech)
             out_rows += placed
             print(f"  第 {k + 1} 首 → 第 {sc0}-{sc1} 章，{(old_hi - old_lo) / US:.1f}s → {new_len / US:.1f}s，"
                   f"{len(placed)} 个镜头卡在拍上")
@@ -250,7 +270,15 @@ def main():
     for r in rows:
         r["chapter_no"] = order.index(r["chapter"]) + 1
     n_ch = len(order)
-    clip_us = {r["path"]: round(float(r["duration_s"]) * US) for r in read_csv(os.path.join(W, "inventory.csv"))}
+    inv = read_csv(os.path.join(W, "inventory.csv"))
+    clip_us = {r["path"]: round(float(r["duration_s"]) * US) for r in inv}
+    speech = {}
+    sp = os.path.join(W, "speech.json")
+    if os.path.exists(sp):     # 第 3 步的转写：切点尽量不切在话中间
+        with open(sp, encoding="utf-8") as f:
+            said = json.load(f)
+        speech = {r["path"]: [(round(x["start"] * US), round(x["end"] * US)) for x in said.get(r["clip_id"], [])]
+                  for r in inv}
 
     spans = chapter_spans(rows)
     if args.split:
@@ -264,7 +292,8 @@ def main():
     assert len(starts) == len(songs) and starts == sorted(set(starts)), f"--split 不对：{starts}"
 
     try:
-        out_rows, bgm = retime(rows, songs, starts, clip_us, _parse_anchors(args.anchor), args.gain, args.fade)
+        out_rows, bgm = retime(rows, songs, starts, clip_us, _parse_anchors(args.anchor), args.gain, args.fade,
+                               speech)
     except ValueError as e:
         sys.exit(str(e))
     fields = [f for f in rows[0].keys() if f != "chapter_no"]

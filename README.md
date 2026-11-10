@@ -18,7 +18,7 @@
 
 https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 
-<p align="center"><sub>60 秒演示：62 段原始素材 → 盘点打分 → MiMo 看懂素材 → 写故事 → 分镜 → 剪映草稿。演示素材来自一次真实的庐山徒步，人脸已打码。
+<p align="center"><sub>60 秒演示：62 段原始素材 → 盘点打分 → Claude 看画面、Whisper 听语音 → 写故事 → 分镜 → 剪映草稿。演示素材来自一次真实的庐山徒步，人脸已打码。
 ⬇ <a href="https://github.com/BeenLi/jianying-autocut/raw/main/docs/promo/promo.mp4">下载 mp4</a></sub></p>
 
 <details>
@@ -31,7 +31,7 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 ## 工作流
 
 <p align="center">
-  <img alt="jianying-autocut 工作流：素材 → 盘点打分 → MiMo 看懂素材 → Claude 写故事 → 分镜规划 → 确认 → 生成剪映草稿" src="docs/workflow.png" width="100%">
+  <img alt="jianying-autocut 工作流：素材 → 盘点打分 → Claude 看联系表写画面描述、本地 Whisper 转写语音 → Claude 写故事 → 分镜规划与卡点 → 确认 → 生成带字幕的剪映草稿" src="docs/workflow.png" width="100%">
 </p>
 
 | 步骤 | 做什么 | 产出（`_autocut/` 下） |
@@ -79,7 +79,7 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 
 | 文件 | 内容 |
 |---|---|
-| `draft_info.json` | 草稿正文（明文 JSON，版本号与本机剪映一致，11.6 为 `164.0.0`）：主视频轨、章节标题文字轨、BGM 音频轨 |
+| `draft_info.json` | 草稿正文（明文 JSON，版本号与本机剪映一致，11.6 为 `164.0.0`）：主视频轨、章节标题文字轨、人声字幕轨（可选）、BGM 音频轨 |
 | `draft_meta_info.json` | 草稿元数据 |
 
 素材**不复制**进草稿，只记录绝对路径：生成后不要移动或改名素材。剪映首次打开时会自行加密这些文件。

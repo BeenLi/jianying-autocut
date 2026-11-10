@@ -12,23 +12,49 @@
   · 输出 {clip_id: [{start, end, text}]}，没有语音的素材是空列表
 """
 import argparse
+import difflib
 import json
 import os
+import re
+from collections import Counter
 
 from common import read_csv
 
-MAX_NO_SPEECH = 0.6    # Whisper 认为「这段不是人声」的概率高于此值就丢弃，减少把风声水声听成字
+MAX_NO_SPEECH = 0.5    # Whisper 认为「这段不是人声」的概率高于此值就丢弃。实测真话 0.02–0.20，幻听 0.60
 BASE_PROMPT = "以下是普通话的句子。"   # 让中文输出简体并带标点
+ECHO_RATIO = 0.8       # 与提示词里某一句的相似度达到这个值，就当作 Whisper 把提示词念了出来
+MAX_REPEAT = 3         # 同一段素材里同一句出现这么多次，就当作幻听整组丢掉
+END_SLACK = 0.5        # 句子结束时间最多超出素材长度这么多秒
 
 
-def speech_from_segments(segments):
-    """Whisper 的分句 → [{start, end, text}]，去掉空句和大概率不是人声的句子。"""
+def _norm(text):
+    return re.sub(r"[\W_]+", "", text)
+
+
+def is_prompt_echo(text, prompt):
+    """安静画面上 Whisper 会把提示词原样输出（实测：日落素材转出「舟山枸杞岛旅行，带着小狗格桑。」）。"""
+    t = _norm(text)
+    if not t or not prompt:
+        return False
+    if len(t) >= 6 and t in _norm(prompt):
+        return True
+    return any(difflib.SequenceMatcher(None, t, _norm(p)).ratio() >= ECHO_RATIO
+               for p in re.split(r"[。！？!?.\n]", prompt) if _norm(p))
+
+
+def speech_from_segments(segments, duration=None, prompt=""):
+    """Whisper 的分句 → [{start, end, text}]。去掉空句、大概率不是人声的句子，以及三种幻听：
+    念出提示词、时间超出素材长度、同一句反复出现。"""
     out = []
     for s in segments:
         text = s.text.strip()
-        if text and s.no_speech_prob <= MAX_NO_SPEECH:
-            out.append({"start": round(s.start, 3), "end": round(s.end, 3), "text": text})
-    return out
+        if not text or s.no_speech_prob > MAX_NO_SPEECH or is_prompt_echo(text, prompt):
+            continue
+        if duration is not None and s.end > duration + END_SLACK:
+            continue
+        out.append({"start": round(s.start, 3), "end": round(s.end, 3), "text": text})
+    counts = Counter(_norm(s["text"]) for s in out)
+    return [s for s in out if counts[_norm(s["text"])] < MAX_REPEAT]
 
 
 def _save(path, result):
@@ -55,7 +81,8 @@ def transcribe_clips(rows, model, out_path, language=None, context="", force=Fal
             try:
                 segments, _ = model.transcribe(r["path"], language=language, initial_prompt=prompt, vad_filter=True,
                                                condition_on_previous_text=False)
-                result[cid] = speech_from_segments(segments)
+                dur = float(r["duration_s"]) if r.get("duration_s") else None
+                result[cid] = speech_from_segments(segments, dur, prompt)
             except Exception as e:   # 坏文件不应该让整批转写白跑
                 print(f"  ⚠ {cid} 转写失败：{e}")
                 continue

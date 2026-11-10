@@ -125,3 +125,16 @@ def test_missed_anchor_warns_with_offset(capsys):
     out, _ = retime(rows, [_song(200)], [1], clip, {2: 41 * US})      # 第 1 章要撑到 40s，素材只有 12s
     assert next(r for r in out if r["chapter_no"] == 2)["start_us"] < 40 * US
     assert "没对上 anchor" in capsys.readouterr().out
+
+
+def test_cut_moves_to_nearby_beat_to_finish_a_sentence():
+    # 第一个镜头取素材 10s 起；素材 13–16s 有一句话。最近的拍点 5.0s（素材 15s）会切在话中间，挪到 6.0s（素材 16s，话说完）
+    speech = {"/x/a.mp4": [(13 * US, 16 * US)]}
+    rows, _ = retime(_rows([[5.2, 5.0]]), [_song(200)], [1], CLIP, {}, speech=speech)
+    assert _ends(rows)[0] == 6 * US
+
+
+def test_cut_stays_on_nearest_beat_when_no_clean_beat_is_close():
+    speech = {"/x/a.mp4": [(0, 60 * US)]}          # 一直在说话：避不开就按原规则
+    rows, _ = retime(_rows([[5.2, 5.0]]), [_song(200)], [1], CLIP, {}, speech=speech)
+    assert _ends(rows)[0] == 5 * US
