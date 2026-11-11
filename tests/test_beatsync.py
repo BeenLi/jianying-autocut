@@ -138,3 +138,13 @@ def test_cut_stays_on_nearest_beat_when_no_clean_beat_is_close():
     speech = {"/x/a.mp4": [(0, 60 * US)]}          # 一直在说话：避不开就按原规则
     rows, _ = retime(_rows([[5.2, 5.0]]), [_song(200)], [1], CLIP, {}, speech=speech)
     assert _ends(rows)[0] == 5 * US
+
+
+def test_beatsync_refuses_narration_work(tmp_path, monkeypatch):
+    import sys
+
+    import beatsync
+    (tmp_path / "narration_track.json").write_text("{}")
+    monkeypatch.setattr(sys, "argv", ["beatsync.py", "--work", str(tmp_path), "--song", "/m/a.mp3"])
+    with pytest.raises(SystemExit, match="旁白"):
+        beatsync.main()

@@ -111,6 +111,20 @@ dl.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0
 dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
 .card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
 .card.accepted { border-color: var(--ok); } .card.rejected { opacity: .6; }
+.dot.skip { background: var(--line); }
+.lines { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 8px; }
+.lines-head { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; font-size: .9rem; color: var(--muted); }
+.line { border-left: 3px solid var(--accent); padding: 4px 10px; display: grid; gap: 6px; min-width: 0; }
+.line.live { border-left-color: var(--warn); }
+.line p { margin: 0; overflow-wrap: anywhere; }
+.hint { font-size: .85rem; color: var(--warn); }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .9rem; }
+.checks label { display: inline-flex; gap: 4px; align-items: center; }
+.prompter { display: grid; gap: 22px; }
+.prompter h2 { font-size: 1.1rem; color: var(--muted); }
+.prompter .say { font-size: 1.6rem; line-height: 1.6; margin: 0; overflow-wrap: anywhere; }
+.prompter .say small { font-family: var(--font-mono); font-size: .9rem; color: var(--muted); margin-left: 8px; }
+.prompter .cue { font-size: 1.05rem; color: var(--warn); margin: 0; }
 @media (prefers-reduced-motion: reduce) { .chev { transition: none; } }
 </style>
 
@@ -118,13 +132,16 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
 
 <script>
 (() => {
-  const COLS = ["plan", "chapters", "shots", "clips", "matches", "extras", "requests"];
+  const COLS = ["plan", "chapters", "shots", "clips", "matches", "extras", "requests", "lines", "nmatch"];
   const FUNC = { hook: "钩子", setup: "铺垫", turn: "转折", escalation: "推进", payoff: "高潮" };
   const RHY = { slow: "慢", normal: "中", fast: "快", montage: "快切" };
   const CONF = { high: "高", mid: "中", low: "低" };
   const SIZES = ["远景", "全景", "中景", "近景", "特写", "空镜"];
   const USER_FIELDS = ["desc", "size", "duration", "kind", "talk", "tips"];
-  const S = { meta: null, chapters: {}, shots: {}, clips: {}, matches: {}, extras: {}, requests: {},
+  const LINE_FIELDS = ["text", "kind", "shots"];
+  const CPS = 4;                                   // 旁白估算：约 4 字/秒
+  const S = { meta: null, chapters: {}, shots: {}, clips: {}, matches: {}, extras: {}, requests: {}, lines: {}, nmatch: {},
+    editingLine: null,
     loaded: new Set(), status: "loading", db: null, canWrite: true, view: null, sel: null,
     open: {}, editing: null, editingCh: null, armDelete: null, failed: new Map(), dead: new Map(), drafts: {} };
 
@@ -137,6 +154,9 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   const chapters = () => Object.entries(S.chapters).map(([id, c]) => ({ ...c, id })).sort(byOrder);
   const shotsOf = ch => Object.entries(S.shots).map(([id, s]) => ({ ...s, id })).filter(s => s.chapter === ch).sort(byOrder);
   const allShots = () => chapters().flatMap(c => shotsOf(c.id));
+  const linesOf = ch => Object.entries(S.lines).map(([id, l]) => ({ ...l, id })).filter(l => l.chapter === ch).sort(byOrder);
+  const estOf = l => l.est_s ?? Math.round(String(l.text || "").replace(/[\s，。！？、；：,.!?;:…]/g, "").length / CPS * 10) / 10;
+  const isNarration = () => !!(S.meta && S.meta.kind === "narration");
   const ro = () => !S.db || !S.canWrite;
   const dis = () => ro() ? "disabled" : "";
 
@@ -184,7 +204,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       const m = id.match(/^note-(.+)$/);
       if (m && S.shots[m[1]] && (S.shots[m[1]].note || "") === v.trim()) { delete S.drafts[id]; continue; }   // 已经存上了
       const el = document.getElementById(id);
-      if (el) el.value = v;
+      if (el && el.type === "checkbox") el.checked = v === "1"; else if (el) el.value = v;
     }
     if (keep) { const el = document.getElementById(keep.id); if (el) { el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch (_) {} } }
   }
@@ -207,6 +227,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         <h1>${esc(m.title || "拍摄脚本")}</h1>
         <div class="switch" role="group" aria-label="视图">
           <button data-act="view" data-v="shoot" aria-pressed="${view === "shoot"}">拍摄</button>
+          ${Object.keys(S.lines).length ? `<button data-act="view" data-v="script" aria-pressed="${view === "script"}">录音稿</button>` : ""}
           <button data-act="view" data-v="edit" aria-pressed="${view === "edit"}">剪辑</button>
         </div>
       </div>
@@ -223,7 +244,10 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   function body() {
     if (S.status === "loading" && !S.meta && !Object.keys(S.shots).length) return `<p class="empty">正在加载拍摄脚本…</p>`;
     if (!S.meta && !Object.keys(S.chapters).length) return `<div class="empty"><p>还没有拍摄脚本。</p><p>在对话里让 Claude 写一份，它会出现在这里。</p></div>`;
-    return currentView() === "edit" ? editView() : shootView();
+    const v = currentView();
+    if (v === "script") return scriptView();
+    if (v === "edit") return isNarration() ? narrEditView() : editView();
+    return shootView();
   }
 
   // ---------- 拍摄视图 ----------
@@ -251,6 +275,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       <div class="ch-body">
         <ul class="shots">${shots.map((s, k) => shotCard(s, k, shots.length)).join("")}</ul>
         ${tools}
+        ${linesBlock(c)}
       </div>
     </section>`;
   }
@@ -302,6 +327,126 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         <button class="danger" data-act="del-shot" data-id="${id}">${S.armDelete === "shot:" + s.id ? "确认删除" : "删除镜头"}</button>
         <button data-act="cancel-edit">取消</button></div>
       <p class="muted" style="font-size:.82rem">调顺序只改这份脚本；剪成片时同一章的镜头按拍摄时间排，钩子章放在最前。</p></div>`;
+  }
+
+  // ---------- 旁白稿 ----------
+  function linesBlock(c) {
+    const ls = linesOf(c.id);
+    const total = ls.filter(l => l.kind !== "live").reduce((a, l) => a + estOf(l), 0);
+    return `<div class="lines-head"><b>旁白稿</b>${ls.length ? `<span class="mono">约 ${Math.round(total)}s</span>` : ""}</div>
+      <ul class="lines">${ls.map((l, k) => lineCard(l, k, ls.length)).join("")}</ul>
+      <div class="row"><button data-act="add-line" data-ch="${esc(c.id)}" ${dis()}>＋ 加一句旁白</button></div>`;
+  }
+
+  function lineHint(l) {
+    const shots = (l.shots || []).map(id => S.shots[id]).filter(Boolean);
+    if (l.kind === "live") return shots.length ? "" : "原声要关联一个口播或现场声镜头";
+    if (!shots.length) return "还没关联镜头：这句话说的时候画面放什么？";
+    const sd = shots.reduce((a, s) => a + (num(s.duration) || 0), 0);
+    const est = estOf(l);
+    return est > sd * 1.5 ? `旁白比画面长：这句约 ${est}s，关联镜头只有 ${sd}s，多拍几个空镜或把镜头拍长一点` : "";
+  }
+
+  function lineCard(l, k, n) {
+    const id = esc(l.id), hint = lineHint(l);
+    const fail = S.failed.has("lines/" + l.id) || S.dead.has("lines/" + l.id);
+    const linked = (l.shots || []).map(x => `<span class="tag">${esc(x)}</span>`).join("");
+    return `<li class="line ${l.kind === "live" ? "live" : ""}">
+      <p>${l.kind === "live" ? "<b>这里放原声</b> " : ""}${esc(l.text)} <span class="mono muted" style="font-size:.8rem">${l.kind === "live" ? "" : `约 ${estOf(l)}s`}</span></p>
+      ${linked ? `<div class="tags">${linked}</div>` : ""}
+      ${hint ? `<p class="hint">${esc(hint)}</p>` : ""}
+      ${S.editingLine === l.id ? lineForm(l, k, n) : `<div class="row"><button data-act="edit-line" data-id="${id}" ${dis()}>编辑</button>${fail ? `<span class="unsaved">未保存</span>` : ""}</div>`}
+    </li>`;
+  }
+
+  function lineForm(l, k, n) {
+    const id = esc(l.id);
+    const shots = shotsOf(l.chapter);
+    return `<div class="form">
+      <label>旁白（写完整的句子，录音时照着念）<textarea id="lt-${id}" rows="3">${esc(l.text)}</textarea></label>
+      <label>类型<select id="lk-${id}"><option value="narr" ${l.kind !== "live" ? "selected" : ""}>旁白</option><option value="live" ${l.kind === "live" ? "selected" : ""}>这里放原声（口播 / 现场声）</option></select></label>
+      <div><span class="muted" style="font-size:.88rem">说这句时的画面</span>
+        <div class="checks">${shots.map(s => `<label><input type="checkbox" id="ls-${id}-${esc(s.id)}" ${(l.shots || []).includes(s.id) ? "checked" : ""}><span class="mono">${esc(s.id)}</span> ${esc(String(s.desc || "").slice(0, 12))}</label>`).join("") || `<span class="muted">本章还没有镜头</span>`}</div></div>
+      <div class="row"><button class="primary" data-act="save-line" data-id="${id}">保存</button>
+        <button data-act="move-line" data-id="${id}" data-d="-1" ${k === 0 ? "disabled" : ""}>上移</button>
+        <button data-act="move-line" data-id="${id}" data-d="1" ${k === n - 1 ? "disabled" : ""}>下移</button>
+        <button class="danger" data-act="del-line" data-id="${id}">${S.armDelete === "line:" + l.id ? "确认删除" : "删除这句"}</button>
+        <button data-act="cancel-line">取消</button></div></div>`;
+  }
+
+  // ---------- 录音稿（提词器） ----------
+  function scriptView() {
+    return `<div class="prompter">` + chapters().map((c, i) => {
+      const ls = linesOf(c.id);
+      if (!ls.length) return "";
+      return `<section><h2>${i + 1} ${esc(c.title)}</h2>` + ls.map(l => l.kind === "live"
+        ? `<p class="cue">（这里停一下，放原声：${esc(l.text || (l.shots || []).map(x => S.shots[x] && S.shots[x].desc).filter(Boolean).join("、"))}）</p>`
+        : `<p class="say">${esc(l.text)}<small>${estOf(l)}s</small></p>`).join("") + `</section>`;
+    }).join("") + `<p class="muted">一章录一个文件最省事；念错了停一下重说整句，剪的时候会自动取最后一遍。</p></div>`;
+  }
+
+  // ---------- 旁白片剪辑视图 ----------
+  function narrEntries() {
+    const chOrder = Object.fromEntries(chapters().map((c, i) => [c.id, i]));
+    const ids = new Set([...Object.keys(S.lines), ...Object.keys(S.nmatch)]);
+    return [...ids].map(id => {
+      const l = S.lines[id], m = S.nmatch[id];
+      return { id, line: l, m, chapter: (l && l.chapter) || (m && m.chapter), order: (l && l.order) ?? (m && m.order) ?? 0,
+        text: (m && m.text) || (l && l.text) || "", kind: (l && l.kind) || (m && m.kind) || "narr" };
+    }).sort((a, b) => (chOrder[a.chapter] ?? 99) - (chOrder[b.chapter] ?? 99) || a.order - b.order || a.id.localeCompare(b.id));
+  }
+
+  function narrState(e) {
+    const m = e.m;
+    if (!m) return ["bad", "没录到"];
+    if (m.skip) return ["skip", "跳过"];
+    if (e.kind !== "live" && !(m.visuals || []).length) return ["bad", "没配画面"];
+    return m.confirmed === true ? ["ok", "已确认"] : ["warn", "待确认"];
+  }
+
+  function narrEditView() {
+    const es = narrEntries();
+    if (!S.sel || !es.some(e => e.id === S.sel)) S.sel = (es.find(e => !["ok", "skip"].includes(narrState(e)[0])) || es[0] || {}).id;
+    const chs = chapters();
+    const counts = es.reduce((a, e) => (a[narrState(e)[0]]++, a), { ok: 0, warn: 0, bad: 0, skip: 0 });
+    const list = chs.map((c, i) => `<h3>${i + 1} ${esc(c.title)}</h3>` + es.filter(e => e.chapter === c.id).map(e => {
+      const [cls] = narrState(e);
+      return `<button class="item" data-act="sel" data-id="${esc(e.id)}" aria-current="${S.sel === e.id}"><span class="dot ${cls}"></span><span class="t">${e.kind === "live" ? "〔原声〕" : ""}${esc(e.text)}</span></button>`;
+    }).join("")).join("");
+    const e = es.find(x => x.id === S.sel);
+    return `<div class="desk">
+      <nav class="list" aria-label="旁白清单">
+        <div class="legend"><span><i class="dot ok"></i>已确认 ${counts.ok}</span><span><i class="dot warn"></i>待确认 ${counts.warn}</span><span><i class="dot bad"></i>缺 ${counts.bad}</span><span><i class="dot skip"></i>跳过 ${counts.skip}</span></div>
+        ${list}
+      </nav>
+      <section class="panel">${e ? narrPanel(e) : `<p class="muted">还没有旁白。</p>`}</section>
+    </div>`;
+  }
+
+  function narrPanel(e) {
+    const m = e.m, id = esc(e.id);
+    const [cls, label] = narrState(e);
+    const fail = S.failed.has("nmatch/" + e.id) || S.dead.has("nmatch/" + e.id);
+    const v0 = m && (m.visuals || [])[0];
+    const head = `<div class="row" style="justify-content:space-between"><h2>${esc(e.text)}</h2><span class="state ${cls === "skip" ? "" : cls}">${label}</span></div>`;
+    if (!m) return head + `<p>录音里没找到这句。要么补录，要么在旁白稿里删掉它。</p>`;
+    const vis = (m.visuals || []).map(v => `<div class="card"><b class="mono">${esc(v.clip_id)}${v.at != null ? " @ " + esc(fmt(v.at)) : ""}</b>${thumbs(v.clip_id)}${S.clips[v.clip_id] && S.clips[v.clip_id].desc ? `<p class="tips">${esc(S.clips[v.clip_id].desc)}</p>` : ""}</div>`).join("");
+    return head + `
+      <dl class="kv"><dt>录音</dt><dd class="mono">${esc(m.file || "")} ${esc(fmt(m.start))}–${esc(fmt(m.end))}</dd>
+        ${m.skip_reason ? `<dt>跳过原因</dt><dd>${esc(m.skip_reason)}</dd>` : ""}
+        ${m.reason ? `<dt>理由</dt><dd>${esc(m.reason)}</dd>` : ""}
+        <dt>把握</dt><dd>${CONF[m.confidence] || "—"}${m.by === "user" ? " · 你改过" : " · Claude 建议"}</dd></dl>
+      ${vis || (e.kind === "live" ? "" : `<p>这句还没配画面：在下面选一段素材，或者留空，成片里会延续上一个镜头。</p>`)}
+      <div class="row">${m.skip ? `<button class="primary" data-act="skip-n" data-id="${id}" data-v="0" ${dis()}>恢复这句</button>` :
+        `${m.confirmed === true ? `<button data-act="unconfirm-n" data-id="${id}" ${dis()}>取消确认</button>` : `<button class="primary" data-act="confirm-n" data-id="${id}" ${dis()}>确认</button>`}
+         <button data-act="skip-n" data-id="${id}" data-v="1" ${dis()}>不要这句</button>`}${fail ? `<span class="unsaved">未保存</span>` : ""}</div>
+      ${e.kind === "live" ? "" : `<div class="form">
+        <div class="two"><label>换成素材<select id="n-clip-${id}"><option value="">选素材</option>${clipOptions(v0 && v0.clip_id)}</select></label>
+          <label>素材内第几秒（可不填）<input type="text" id="n-at-${id}" value="${v0 && v0.at != null ? esc(v0.at) : ""}"></label></div>
+        <div class="row"><button data-act="reassign-n" data-id="${id}" ${dis()}>改成这个并确认</button></div></div>`}
+      <div class="form"><div class="two"><label>录音里从第几秒<input type="text" id="n-start-${id}" value="${esc(m.start ?? "")}"></label>
+        <label>到第几秒<input type="text" id="n-end-${id}" value="${esc(m.end ?? "")}"></label></div>
+        <div class="row"><button data-act="retime-n" data-id="${id}" ${dis()}>改时间</button><span class="muted" style="font-size:.82rem">句头句尾被切掉时改这里</span></div></div>`;
   }
 
   // ---------- 剪辑视图 ----------
@@ -478,6 +623,57 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       write("matches/" + id, S.matches[id] ? data : { ...data, confidence: null, reason: "" }, S.matches[id] ? "update" : "set");
     },
     extra: el => write("extras/" + el.dataset.id, { accepted: el.dataset.v === "1" }),
+    "add-line": el => {
+      const ch = el.dataset.ch;
+      const n = Math.max(0, ...Object.keys(S.lines).map(k => +(k.match(/^L(\d+)$/) || [, 0])[1]));
+      const id = "L" + String(n + 1).padStart(2, "0");
+      const order = Math.max(0, ...linesOf(ch).map(l => l.order ?? 0)) + 1;
+      write("lines/" + id, { chapter: ch, order, kind: "narr", text: "新的一句旁白", shots: [], edited_by_user: [...LINE_FIELDS], created_by: "user" }, "set");
+      S.editingLine = id; S.open[ch] = true;
+    },
+    "edit-line": el => { S.editingLine = el.dataset.id; S.armDelete = null; render(); },
+    "cancel-line": () => { clearDrafts(/^l[tks]-/); S.editingLine = null; S.armDelete = null; render(); },
+    "save-line": el => {
+      const id = el.dataset.id, l = S.lines[id], patch = {};
+      const box = sid => { const d = S.drafts[`ls-${id}-${sid}`]; if (d !== undefined) return d === "1"; const b = document.getElementById(`ls-${id}-${sid}`); return b && b.checked !== undefined ? !!b.checked : (l.shots || []).includes(sid); };
+      const next = { text: val(`lt-${id}`).trim() || l.text, kind: val(`lk-${id}`) || l.kind || "narr",
+        shots: shotsOf(l.chapter).map(s => s.id).filter(box) };
+      for (const k of LINE_FIELDS) if (JSON.stringify(next[k] ?? "") !== JSON.stringify(l[k] ?? "")) patch[k] = next[k];
+      if (Object.keys(patch).length) {
+        if ("text" in patch) patch.est_s = null;
+        patch.edited_by_user = [...new Set([...(l.edited_by_user || []), ...Object.keys(patch).filter(k => LINE_FIELDS.includes(k))])];
+        write("lines/" + id, patch);
+      }
+      S.editingLine = null; clearDrafts(new RegExp(`^l[tks]-${id}(-|$)`)); render();
+    },
+    "move-line": el => { const l = S.lines[el.dataset.id]; const list = linesOf(l.chapter); swap(list, list.findIndex(x => x.id === el.dataset.id), +el.dataset.d, "lines"); },
+    "del-line": el => {
+      const id = el.dataset.id;
+      if (S.armDelete !== "line:" + id) { S.armDelete = "line:" + id; render(); return; }
+      write("lines/" + id, null, "delete"); S.editingLine = null; S.armDelete = null;
+    },
+    "confirm-n": el => write("nmatch/" + el.dataset.id, { confirmed: true, by: "user" }),
+    "unconfirm-n": el => write("nmatch/" + el.dataset.id, { confirmed: false }),
+    "skip-n": el => write("nmatch/" + el.dataset.id, el.dataset.v === "1" ? { skip: true, skip_reason: "你标的", by: "user" } : { skip: false, by: "user" }),
+    "reassign-n": el => {
+      const id = el.dataset.id, clip = val(`n-clip-${id}`), at = num(val(`n-at-${id}`));
+      const dur = S.clips[clip] && num(S.clips[clip].duration);
+      if (!clip || (at !== null && (at < 0 || (dur != null && at > dur)))) {
+        const b = document.getElementById(`n-at-${id}`); if (b && b.setCustomValidity) { b.setCustomValidity("请选素材；秒数要在素材长度以内"); b.reportValidity(); b.setCustomValidity(""); }
+        return;
+      }
+      clearDrafts(new RegExp(`^n-(clip|at)-${id}$`));
+      write("nmatch/" + id, { visuals: [at === null ? { clip_id: clip } : { clip_id: clip, at }], confirmed: true, by: "user" });
+    },
+    "retime-n": el => {
+      const id = el.dataset.id, a = num(val(`n-start-${id}`)), b = num(val(`n-end-${id}`));
+      if (a === null || b === null || a < 0 || b <= a) {
+        const x = document.getElementById(`n-end-${id}`); if (x && x.setCustomValidity) { x.setCustomValidity("结束要晚于开始"); x.reportValidity(); x.setCustomValidity(""); }
+        return;
+      }
+      clearDrafts(new RegExp(`^n-(start|end)-${id}$`));
+      write("nmatch/" + id, { start: a, end: b, by: "user" });
+    },
     "add-req": () => {
       const text = val("req-new").trim(); if (!text || ro()) return;
       S.reqError = false;
@@ -512,7 +708,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   app.addEventListener("change", e => {
     const el = e.target;
     if (el.dataset.act === "done") { retryFailed(); actions.done(el); return; }
-    if (el.id) S.drafts[el.id] = el.value;
+    if (el.id) S.drafts[el.id] = el.type === "checkbox" ? (el.checked ? "1" : "") : el.value;
     if (el.dataset.act === "note") saveNote(el.dataset.id);
   });
 

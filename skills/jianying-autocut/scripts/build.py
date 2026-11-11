@@ -5,6 +5,7 @@
 """第 6 步 生成剪映草稿：shots.csv → 剪映专业版 11.6 能直接打开的草稿
 
 用法: uv run --script build.py --work W --name 庐山粗剪 [--titles] [--bgm 歌.mp3[:音量[:淡入淡出秒]]] [--subs W/subtitles.json] [--replace]
+      旁白片：… --narration W/narration_track.json [--bgm 歌.mp3] [--titles]
 
   · 版本号：new_version / app_version 每次从本机剪映读（root_meta_info.json + Info.plist），不硬编码
   · 素材零复制：只引用绝对路径；时长 / 宽高取自 inventory.csv 直接注入，不再逐个解析文件
@@ -14,6 +15,9 @@
   · 画面方向：orientation.json 判定整段倒装的素材，片段旋转 180°
   · 字幕：--subs 给出有意义的人声（{clip_id: [{start, end, text}]}，素材内秒），生成底部带底色的字幕；
     说话时 BGM 压到 25%，有字幕的镜头原声开到 100%
+  · 旁白片（--narration，narrate.py 的输出）：多一条「旁白」音轨；人声按来源归一化到 -16 LUFS（最多 +12dB、
+    真峰值 ≤ -1dBTP）；旁白下的原声垫底，原声段（live）按人声归一化；BGM 默认停在压低档、全片一个值，
+    只在长空隙 / bgm: up 处升起，bgm: drop 处淡出；逐句校验人声比 BGM 高 ≥ 12 LU（只报告）
   · 写完重新读回来自检：零缝隙零重叠、时长精确、无悬空引用、素材零复制、版本号对齐、BGM 不越界
 只生成草稿，不导出成片——导出请在剪映里手动点。
 """
@@ -23,6 +27,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import uuid
 from collections import Counter
@@ -30,6 +35,7 @@ from collections import Counter
 import pyJianYingDraft as jy
 from pyJianYingDraft import Timerange, TrackSpec, TrackType
 
+import loudness
 from common import DRAFTS_DIR, US, detect_versions, jianying_running, read_csv
 
 TITLE_US = 3 * US
@@ -39,6 +45,10 @@ SUB_CUT_WARN = 0.8         # 一句话只剩不到 80% 在镜头里：提醒这�
 DUCK = 0.25                # 有人说话时 BGM 压到原音量的这个比例
 DUCK_RAMP = int(0.3 * US)  # 压低 / 恢复的过渡时长
 SPEECH_VOLUME = 1.0        # 有字幕的镜头原声音量
+NARR_TRACK = "旁白"
+RAMP_UP = int(0.8 * US)    # 旁白片：BGM 升起用的过渡（比压低慢，听着不突兀）
+LOUD_GAP = 4 * US          # 旁白片：没有人声的空隙至少这么长，BGM 才升起来
+NOISE_MIN_DB = 15.0        # 原声段：人声比底噪高不到这么多 dB 就不提升（越提越吵）
 
 
 def place_subs(subs, shots):
@@ -64,7 +74,7 @@ def place_subs(subs, shots):
     return sorted(placed), warns
 
 
-def duck_keyframes(speech, seg_start, seg_dur, base, duck, ramp=DUCK_RAMP):
+def duck_keyframes(speech, seg_start, seg_dur, base, duck, ramp=DUCK_RAMP, merge_gap=None):
     """speech：[(成片起点, 时长)]。返回 BGM 片段内的音量关键帧 [(片段内偏移, 音量)]：
     说话时压到 duck，前后各用 ramp 过渡；间隔不到 2 个 ramp 的两句合并，不在中间把音乐拉起来。"""
     spans = []
@@ -72,7 +82,7 @@ def duck_keyframes(speech, seg_start, seg_dur, base, duck, ramp=DUCK_RAMP):
         a, b = max(t, seg_start) - seg_start, min(t + d, seg_start + seg_dur) - seg_start
         if b <= a:
             continue
-        if spans and a - spans[-1][1] < 2 * ramp:
+        if spans and a - spans[-1][1] < (2 * ramp if merge_gap is None else merge_gap):
             spans[-1][1] = max(spans[-1][1], b)
         else:
             spans.append([a, b])
@@ -84,6 +94,137 @@ def duck_keyframes(speech, seg_start, seg_dur, base, duck, ramp=DUCK_RAMP):
         if b + ramp <= seg_dur:
             kf.append((b + ramp, base))
     return kf
+
+
+def bgm_curve(speech, ups, drops, seg_start, seg_dur, base, duck, ramp_down=DUCK_RAMP, ramp_up=RAMP_UP,
+              min_gap=LOUD_GAP, total_us=None):
+    """旁白片的 BGM 音量曲线（片段内关键帧）：默认停在压低档 base*duck；没有人声的空隙 ≥ min_gap、
+    或 ups 区间升到 base；drops 区间降到 0。压低在边界前完成（开口时已压好），升起在边界后开始。"""
+    total = total_us if total_us is not None else seg_start + seg_dur
+    low = base * duck
+    loud, prev = [], 0
+    for a, d in sorted(speech):
+        if a - prev >= min_gap:
+            loud.append((prev, a))
+        prev = max(prev, a + d)
+    if total - prev >= min_gap:
+        loud.append((prev, total))
+    loud += [(a, a + d) for a, d in ups]
+    drop = [(a, a + d) for a, d in drops]
+
+    def level(t):
+        if any(a <= t < b for a, b in drop):
+            return 0.0
+        return base if any(a <= t < b for a, b in loud) else low
+
+    xs = sorted({x for a, b in loud + drop for x in (a, b) if 0 < x < total})
+    bps = [(0, level(0))]
+    for k, x in enumerate(xs):
+        A, B = level(x - 1), level(x)
+        if A == B:
+            continue
+        if B < A:
+            bps += [(max(x - ramp_down, bps[-1][0]), A), (x, B)]
+        else:
+            nxt = xs[k + 1] if k + 1 < len(xs) else total
+            bps += [(x, A), (min(x + ramp_up, nxt), B)]
+    bps.append((total, level(total - 1)))
+
+    def at(t):
+        for (a, va), (b, vb) in zip(bps, bps[1:]):
+            if a <= t <= b:
+                return va if b == a else va + (vb - va) * (t - a) / (b - a)
+        return bps[-1][1]
+
+    offs = sorted({0, seg_dur} | {t - seg_start for t, _ in bps if seg_start < t < seg_start + seg_dur})
+    return [(o, at(seg_start + o)) for o in offs]
+
+
+def injected_audio(path, duration_us):
+    """不走 AudioMaterial.__init__（它要 pymediainfo 解析文件）：时长取自 transcribe.py --narration 的记录。"""
+    m = jy.AudioMaterial.__new__(jy.AudioMaterial)
+    m.path = os.path.abspath(path)
+    m.material_name = os.path.basename(path)
+    m.material_id = uuid.uuid4().hex
+    m.duration = duration_us
+    return m
+
+
+def narration_mix(cache, narr, shots, inv, speech_json):
+    """旁白片的音量：返回 (旁白文件增益 {path: g}, 原声段增益 {clip_id: g}, 垫底 {clip_id: g}, 人声电平 {key: LUFS}, 报告)。
+    人声电平的 key：旁白文件路径，或 "live:<clip_id>"。"""
+    notes, vo_gain, live_gain, bed, level = [], {}, {}, {}, {}
+    for path in sorted({a["file"] for a in narr["audio"]}):
+        m = cache.measure(path)
+        g, short = loudness.voice_gain(m["i"], m["tp"])
+        vo_gain[path], level[path] = g, m["i"] + loudness.db(g)
+        if short > 0.05:
+            notes.append(f"{os.path.basename(path)} 太小声，提到 +{loudness.db(g):.1f} dB 还差 {short:.1f} dB："
+                         "建议重录，或在剪映里降噪后再提")
+    by_cid = {r["clip_id"]: r for r in inv.values()}
+    for lv in narr["live"]:
+        cid = lv["clip_id"]
+        path = by_cid[cid]["path"]
+        a, b = lv["src_us"] / US, (lv["src_us"] + lv["dur_us"]) / US
+        lines = [l for l in speech_json.get(cid, []) if l["end"] > a and l["start"] < b]
+        whole = cache.measure(path, round(a, 3), round(b, 3))
+        m = cache.measure(path, round(max(a, min(l["start"] for l in lines)), 3),
+                          round(min(b, max(l["end"] for l in lines)), 3)) if lines else whole
+        g, short = loudness.voice_gain(m["i"], m["tp"])
+        floor = min((v for _, v in whole["short"] if v > -70), default=m["i"])
+        if g > 1 and m["i"] - floor < NOISE_MIN_DB:
+            g = 1.0
+            notes.append(f"原声段 {cid} 现场太吵（人声只比底噪高 {m['i'] - floor:.1f} dB），没有提升音量")
+        live_gain[cid], level["live:" + cid] = g, m["i"] + loudness.db(g)
+    for s in shots:
+        cid = s["clip_id"]
+        if s["kind"] == "narr" and cid not in bed:
+            row = by_cid[cid]
+            bed[cid] = loudness.bed_gain(cache.measure(row["path"])["i"]) if str(row.get("has_audio")) == "True" else 0.0
+    return vo_gain, live_gain, bed, level, notes
+
+
+def bgm_mix(cache, bgms, songs, total, speech):
+    """每首歌按实测拉到同一响度（只衰减），再算全片统一的压低比例。
+    返回 ([(歌内铺法 segs, 基础增益, 实测)], 压低比例)。"""
+    meas = [cache.measure(b["path"]) for b in bgms]
+    quiet = min(m["i"] for m in meas)
+    cum = [0]
+    for m in songs:
+        cum.append(cum[-1] + m.duration)
+    plans, levels = [], []
+    for k, (b, mat, m) in enumerate(zip(bgms, songs, meas)):
+        start, end = total * cum[k] // cum[-1], total * cum[k + 1] // cum[-1]
+        segs = bgm_segments(mat.duration, start, end)
+        base = b["gain"] * min(1.0, 10 ** ((quiet - m["i"]) / 20))
+        s_max = None
+        for t0, s0, d in segs:
+            for a, dd in speech:
+                lo, hi = max(a, t0), min(a + dd, t0 + d)
+                if hi > lo:
+                    v = loudness.max_short(m["short"], (s0 + lo - t0) / US, (s0 + hi - t0) / US)
+                    if v is not None:
+                        s_max = v if s_max is None else max(s_max, v)
+        if s_max is not None:
+            levels.append((loudness.db(base), s_max))
+        plans.append((segs, base, m))
+    return plans, loudness.bgm_duck(levels)
+
+
+def bgm_level_fn(plans, duck):
+    """(a_us, b_us) → 这段时间里 BGM 的实际最大短时响度（已含增益和压低）；没有 BGM 返回 None。"""
+    def f(a, b):
+        best = None
+        for segs, base, m in plans:
+            for t0, s0, d in segs:
+                lo, hi = max(a, t0), min(b, t0 + d)
+                if hi > lo:
+                    v = loudness.max_short(m["short"], (s0 + lo - t0) / US, (s0 + hi - t0) / US)
+                    if v is not None:
+                        v += loudness.db(base * duck)
+                        best = v if best is None else max(best, v)
+        return best
+    return f
 
 
 def parse_bgm(arg):
@@ -156,7 +297,7 @@ def stamp_versions(script, meta_path, v):
         json.dump(meta, f, ensure_ascii=False)
 
 
-def verify(draft_dir, shots, versions, bgm_expected):
+def verify(draft_dir, shots, versions, bgm_expected, narr_expected=0):
     """落盘后重新读回来校验，任何一条不过都算失败。"""
     with open(os.path.join(draft_dir, "draft_info.json"), encoding="utf-8") as f:
         d = json.load(f)
@@ -175,7 +316,14 @@ def verify(draft_dir, shots, versions, bgm_expected):
         if tr["start"] != cursor:
             errs.append(f"第 {i} 段起点 {tr['start']} ≠ 上一段终点 {cursor}（{'缝隙' if tr['start'] > cursor else '重叠'}）")
         cursor = tr["start"] + tr["duration"]
-    audio = [s for t in d["tracks"] if t["type"] == "audio" for s in t["segments"]]
+    audio = [s for t in d["tracks"] if t["type"] == "audio" and t.get("name") != NARR_TRACK for s in t["segments"]]
+    narr = [s for t in d["tracks"] if t["type"] == "audio" and t.get("name") == NARR_TRACK for s in t["segments"]]
+    if len(narr) != narr_expected:
+        errs.append(f"旁白段数 {len(narr)} ≠ 预期 {narr_expected}")
+    for s in narr:
+        tr = s["target_timerange"]
+        if tr["start"] + tr["duration"] > expect:
+            errs.append(f"旁白段 {tr['start']} 超出成片终点 {expect}")
     if len(audio) != bgm_expected:
         errs.append(f"BGM 段数 {len(audio)} ≠ 预期 {bgm_expected}")
     end = 0
@@ -214,7 +362,10 @@ def main():
     ap.add_argument("--titles", action="store_true", help="每章开头加 3 秒章节标题（文字轨）")
     ap.add_argument("--subs", help="字幕文件（有意义的人声），见 references/pitfalls.md「字幕」")
     ap.add_argument("--replace", action="store_true", help="同名草稿已存在时整目录删除后重建")
+    ap.add_argument("--narration", help="旁白片：narrate.py 生成的 narration_track.json")
     args = ap.parse_args()
+    if args.narration and args.bgm_plan:
+        sys.exit("旁白片不卡点：镜头时长由旁白决定，用 --bgm 铺 BGM，不要用 --bgm-plan")
 
     if jianying_running():
         sys.exit("剪映正在运行。请 ⌘Q 完全退出剪映后再跑（它退出时会把打开过的草稿重新加密覆盖）。")
@@ -243,9 +394,27 @@ def main():
     for s in shots:
         s["clip_id"] = inv[s["source"]]["clip_id"]
     subs, sub_warns = [], []
+    narr = None
+    if args.narration:
+        with open(args.narration, encoding="utf-8") as f:
+            narr = json.load(f)
+        with open(os.path.join(args.work, "narration_speech.json"), encoding="utf-8") as f:
+            vo = json.load(f)
+        vo_durs = {p: round(vo["durations"][fid] * US) for fid, p in vo["files"].items() if fid in vo["durations"]}
+        missing_vo = [a["file"] for a in narr["audio"] if a["file"] not in vo_durs or not os.path.exists(a["file"])]
+        if missing_vo:
+            sys.exit(f"旁白文件不存在或没转写过：{missing_vo[:3]}")
+        sp = os.path.join(args.work, "speech.json")
+        speech_json = json.load(open(sp, encoding="utf-8")) if os.path.exists(sp) else {}
+        cache = loudness.Cache(args.work)
+        try:
+            vo_gain, live_gain, bed, voice_level, mix_notes = narration_mix(cache, narr, shots, inv, speech_json)
+        except (OSError, subprocess.SubprocessError) as e:
+            sys.exit(f"测响度失败（需要 ffmpeg）：{e}")
     if args.subs:
         with open(args.subs, encoding="utf-8") as f:
-            subs, sub_warns = place_subs(json.load(f), shots)
+            # 旁白片：垫底镜头的原声听不清，只给原声段（live）加字幕
+            subs, sub_warns = place_subs(json.load(f), [s for s in shots if not args.narration or s["kind"] == "live"])
     versions = detect_versions(args.drafts_dir)
     print(f"本机剪映 {versions['app_version']}，草稿版本 {versions['new_version']}"
           f"（读自草稿「{versions['from_draft']}」）")
@@ -286,11 +455,33 @@ def main():
         dur = int(s["dur_us"])
         cs = jy.ClipSettings(rotation=180) if rotate.get(inv[src]["clip_id"]) == 180 else None
         t0 = int(s["start_us"])
-        talks = any(a < t0 + dur and t0 < a + d for a, d, _ in subs)
+        if narr is not None:   # 旁白片：原声音量只由镜头类型决定
+            cid = inv[src]["clip_id"]
+            vol = live_gain.get(cid, 1.0) if s["kind"] == "live" else (
+                args.volume if args.volume is not None else bed.get(cid, 0.0))
+        else:
+            talks = any(a < t0 + dur and t0 < a + d for a, d, _ in subs)
+            vol = max(volume, SPEECH_VOLUME) if talks else volume
         seg = jy.VideoSegment(mats[src], Timerange(t0, dur), source_timerange=Timerange(int(s["in_us"]), dur),
-                              volume=max(volume, SPEECH_VOLUME) if talks else volume, clip_settings=cs)
+                              volume=vol, clip_settings=cs)
         script.add_segment(seg, main_track)
     total = sum(int(s["dur_us"]) for s in shots)
+
+    narr_count = 0
+    if narr is not None:
+        vo_track = script.append_track(TrackSpec(TrackType.audio, NARR_TRACK))
+        vo_mats = {}
+        for a in narr["audio"]:
+            p = a["file"]
+            if p not in vo_mats:
+                vo_mats[p] = injected_audio(p, vo_durs[p])
+            seg = jy.AudioSegment(vo_mats[p], Timerange(a["start_us"], a["dur_us"]),
+                                  source_timerange=Timerange(a["src_us"], a["dur_us"]), volume=vo_gain[p])
+            if a.get("fade_in_us") or a.get("fade_out_us"):
+                seg.add_fade(a.get("fade_in_us", 0), a.get("fade_out_us", 0))
+            script.add_segment(seg, vo_track)
+            narr_count += 1
+        subs = sorted(subs + [(x["start_us"], x["dur_us"], x["text"]) for x in narr["subs"]])
 
     if args.titles:
         text_track = script.append_track(TrackSpec(TrackType.text, "章节标题"))
@@ -313,7 +504,7 @@ def main():
                                  clip_settings=jy.ClipSettings(transform_y=-0.85))
             seg.extra_material_refs = []
             script.add_segment(seg, sub_track)
-    speech = [(t0, d) for t0, d, _ in subs]
+    speech = [(t0, d) for t0, d, _ in subs] if narr is None else [tuple(x) for x in narr["speech"]]
 
     def duck(seg, t0, d, gain):
         for off, v in duck_keyframes(speech, t0, d, gain, gain * DUCK):
@@ -334,6 +525,37 @@ def main():
             duck(seg, int(b["start_us"]), d, b["gain"])
             script.add_segment(seg, bgm_track)
             bgm_count += 1
+    elif bgms and narr is not None:
+        bgm_track = script.append_track(TrackSpec(TrackType.audio, "BGM"))
+        songs = [jy.AudioMaterial(b["path"]) for b in bgms]
+        plans, duck_ratio = bgm_mix(cache, bgms, songs, total, speech)
+        ups = [(x["start_us"], x["dur_us"]) for x in narr["bgm"] if x["mode"] == "up"]
+        drops = [(x["start_us"], x["dur_us"]) for x in narr["bgm"] if x["mode"] == "drop"]
+        for b, mat, (segs, base, _) in zip(bgms, songs, plans):
+            fade = round(b["fade"] * US)
+            for i, (t0, s0, d) in enumerate(segs):
+                seg = jy.AudioSegment(mat, Timerange(t0, d), source_timerange=Timerange(s0, d), volume=base)
+                fin = min(fade, d // 2) if i == 0 else 0
+                fout = min(fade, d // 2) if i == len(segs) - 1 else 0
+                if fin or fout:
+                    seg.add_fade(fin, fout)
+                for off, v in bgm_curve(speech, ups, drops, t0, d, base, duck_ratio, total_us=total):
+                    seg.add_keyframe(off, v)
+                script.add_segment(seg, bgm_track)
+                bgm_count += 1
+        live_at = [(x["start_us"], x["start_us"] + x["dur_us"], x["clip_id"]) for x in narr["live"]]
+        audio_at = [(x["start_us"], x["start_us"] + x["dur_us"], x["file"]) for x in narr["audio"]]
+
+        def voice_of(t):
+            for a, b_, cid in live_at:
+                if a <= t < b_:
+                    return voice_level["live:" + cid]
+            for a, b_, p in audio_at:
+                if a <= t < b_:
+                    return voice_level[p]
+            return loudness.VOICE_TARGET
+        mix_notes += loudness.margin_warnings(speech, bgm_level_fn(plans, duck_ratio), [voice_of(t) for t, _ in speech])
+        mix_notes.insert(0, f"BGM 全片压低到 {duck_ratio:.0%}（只在长空隙 / bgm: up 处升起）")
     elif bgms:
         bgm_track = script.append_track(TrackSpec(TrackType.audio, "BGM"))
         songs = [jy.AudioMaterial(b["path"]) for b in bgms]
@@ -358,22 +580,45 @@ def main():
 
     script.save()  # 不传 inline_materials：素材只记路径
 
-    errs, d = verify(draft_dir, shots, versions, bgm_count)
+    if narr is None and bgms and subs:   # 口播片也查一遍：人声要比同时段 BGM 高 ≥ 12 LU
+        try:
+            cache = loudness.Cache(args.work)
+            plans, _ = bgm_mix(cache, bgms, songs, total, speech)
+            voice = []
+            for t0, d, _ in subs:
+                shot = next(s for s in shots if int(s["start_us"]) <= t0 < int(s["start_us"]) + int(s["dur_us"]))
+                a = (int(shot["in_us"]) + t0 - int(shot["start_us"])) / US
+                voice.append(cache.measure(shot["source"], round(a, 3), round(a + d / US, 3))["i"])
+            for w_ in loudness.margin_warnings(speech, bgm_level_fn(plans, DUCK), voice):
+                sub_warns.append(w_)
+        except (OSError, subprocess.SubprocessError, StopIteration):
+            sub_warns.append("没测成响度（需要 ffmpeg），人声和 BGM 的音量差没有校验")
+
+    errs, d = verify(draft_dir, shots, versions, bgm_count, narr_count)
     sec = d["duration"] / US
     print(f"\n草稿：{draft_dir}")
     print(f"  {len(shots)} 个镜头 / {len(mats)} 段素材 / {len({s['chapter'] for s in shots})} 章"
           f"{' + 章节标题' if args.titles else ''}{f' + BGM {len(bgms)} 首（{bgm_count} 段）' if bgms else (f' + 卡点 BGM {bgm_count} 段' if bgm_count else '')}，"
-          f"总长 {int(sec // 60)}:{sec % 60:06.3f}，画布 {w}x{h}@{fps}，原声音量 {volume:g}")
+          f"总长 {int(sec // 60)}:{sec % 60:06.3f}，画布 {w}x{h}@{fps}，"
+          + ("原声：旁白下垫底、原声段归一化" if narr is not None else f"原声音量 {volume:g}"))
     if errs:
         print("\n校验失败：")
         for e in errs:
             print("  ✗", e)
         sys.exit(1)
     print("  ✓ 零缝隙零重叠 ✓ 时长精确 ✓ 无悬空引用 ✓ 素材零复制 ✓ 版本号对齐" + (" ✓ BGM 铺满不越界" if bgm_count else ""))
+    if narr is not None:
+        print(f"  旁白 {narr_count} 段 / 原声段 {len(narr['live'])} 个 / 字幕 {len(subs)} 条")
+        boosted = [os.path.basename(p) for p, g in vo_gain.items() if g > 1] + \
+                  [c for c, g in live_gain.items() if g > 1]
+        if boosted:
+            print(f"  ⚠ 音量放大（>100%）待真机验证剪映是否生效：{'、'.join(boosted)}")
+        for n in mix_notes:
+            print("  ⚠" if "人声只比" in n or "太" in n else "  ·", n)
     if args.subs:
         print(f"  字幕 {len(subs)} 条，说话时 BGM 压到 {DUCK:.0%}")
-        for w_ in sub_warns:
-            print("  ⚠", w_)
+    for w_ in sub_warns:
+        print("  ⚠", w_)
     print("\n现在打开剪映，首页就能看到这个草稿。素材文件别移动或改名（草稿里存的是绝对路径）。")
 
 
