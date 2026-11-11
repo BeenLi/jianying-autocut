@@ -132,3 +132,23 @@ def test_assign_file_ids_stable():
     from transcribe import assign_file_ids
     assert assign_file_ids(["/b", "/c", "/a"], {"n1": "/a", "n2": "/b"}) == {"n1": "/a", "n2": "/b", "n3": "/c"}
     assert assign_file_ids(["/x", "/y"], {}) == {"n1": "/x", "n2": "/y"}
+
+
+def test_narration_retranscribes_when_file_changed(tmp_path, monkeypatch):     # Important 5
+    import probe
+    import transcribe
+    monkeypatch.setattr(transcribe, "_duration", lambda p: 5.0)
+    monkeypatch.setattr(probe, "analyze_audio", lambda p, d: [])
+    f = tmp_path / "01.m4a"
+    f.write_bytes(b"a")
+    model = FakeModel({str(f): [_seg(0, 1, "第一遍")]})
+    out = str(tmp_path / "narration_speech.json")
+    transcribe.transcribe_narration([str(f)], model, out)
+    transcribe.transcribe_narration([str(f)], model, out)
+    assert len(model.calls) == 1                              # 没变：跳过
+    f.write_bytes(b"bb")
+    st = os.stat(f)
+    os.utime(f, (st.st_atime, st.st_mtime + 10))
+    model.by_path[str(f)] = [_seg(0, 2, "重录了")]
+    r = transcribe.transcribe_narration([str(f)], model, out)
+    assert len(model.calls) == 2 and r["lines"]["n1"][0]["text"] == "重录了"

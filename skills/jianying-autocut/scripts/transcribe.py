@@ -135,21 +135,25 @@ def _duration(path):
 def transcribe_narration(paths, model, out_path, language=None, context="", force=False):
     """逐个旁白文件转写 + 静音检测，每完成一个就落盘。"""
     from probe import analyze_audio
-    result = {"files": {}, "durations": {}, "lines": {}, "silences": {}}
+    result = {"files": {}, "durations": {}, "lines": {}, "silences": {}, "stamps": {}}
     if os.path.exists(out_path) and not force:
         with open(out_path, encoding="utf-8") as f:
             result = json.load(f)
     result["files"] = assign_file_ids(paths, result.get("files", {}))
+    result.setdefault("stamps", {})
     prompt = f"{BASE_PROMPT}{context}" if context else BASE_PROMPT
     for i, (fid, p) in enumerate(result["files"].items(), 1):
-        if fid in result["lines"]:
-            continue
+        st = os.stat(p)
+        stamp = [st.st_mtime, st.st_size]
+        if fid in result["lines"] and result["stamps"].get(fid) == stamp:
+            continue                      # 没变过；重录覆盖了同名文件就重新转写
         dur = _duration(p)
         segments, _ = model.transcribe(p, language=language, initial_prompt=prompt, vad_filter=True,
                                        condition_on_previous_text=False, word_timestamps=True)
         result["durations"][fid] = dur
         result["lines"][fid] = speech_from_segments(segments, dur, prompt, dedupe=False, words=True)
         result["silences"][fid] = [[round(a, 3), round(b, 3)] for a, b in analyze_audio(p, dur)]
+        result["stamps"][fid] = stamp
         print(f"  [{i}/{len(paths)}] {fid} {os.path.basename(p)}：{len(result['lines'][fid])} 句")
         _save(out_path, result)
     _save(out_path, result)

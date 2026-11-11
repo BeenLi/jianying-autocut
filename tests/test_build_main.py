@@ -170,3 +170,16 @@ def test_build_rejects_narration_with_bgm_plan(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="卡点"):
         _run(monkeypatch, "--work", str(work), "--name", "x", "--drafts-dir", str(drafts),
              "--narration", str(work / "narration_track.json"), "--bgm-plan", str(work / "bgm_plan.json"))
+
+
+def test_narration_subs_only_on_live_shots(tmp_path, monkeypatch):            # Important 7
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work)
+    (work / "subtitles.json").write_text(json.dumps(
+        {"c001": [{"start": 2.0, "end": 4.0, "text": "垫底里的话"}], "c002": [{"start": 2.2, "end": 3.0, "text": "哇哦"}]},
+        ensure_ascii=False))
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -6.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    _run(monkeypatch, "--work", str(work), "--name", "字幕", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"), "--subs", str(work / "subtitles.json"))
+    texts = json.dumps(json.load(open(drafts / "字幕" / "draft_info.json"))["materials"].get("texts", []), ensure_ascii=False)
+    assert "哇哦" in texts and "垫底里的话" not in texts

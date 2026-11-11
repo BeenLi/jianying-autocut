@@ -31,6 +31,8 @@ RETAKE_RATIO = 0.8       # 两句相似到这个程度，就当作同一句录�
 RETAKE_WINDOW = 3        # 只和后面这么多句比（重录总是紧挨着）
 RESTART_MAX_CHARS = 8    # 「重来」类关键词出现在不超过这么多字的短句里才算口头标记
 SCRIPT_RATIO = 0.6       # 转写句和稿子句相似到这个程度才算对上
+SPLIT_GAIN = 0.05        # 和前一段拼起来比单独更像稿子这么多，就当作同一句被 Whisper 拆成了两段
+OVERLAP_TOL = 0.3        # 相邻两句在源文件里重叠不超过这么多秒（Whisper 边界误差）仍算连续
 BGM_MODES = ("up", "drop")
 TALK_PENALTY = 0.5       # 素材里对镜说话的区间，挑画面时得分乘这个系数（免得画面张嘴、声音是旁白）
 SUB_MAX = 16             # 每条字幕最多这么多字
@@ -130,16 +132,28 @@ def align_to_script(lines, script):
     """有旁白稿时：每句转写对到最像的稿子句。同一稿子句录了几遍只留最后一遍；对不上的是口误或闲聊。
     返回 (lines, 没录到的稿子 id)。"""
     out = [dict(l) for l in lines]
-    last = {}
+    text = {s["id"]: s["text"] for s in script}
+    last = {}            # 稿子 id → 最近一遍录音的句子下标（Whisper 拆开的一句有几段就有几个）
+    prev = None
     for k, l in enumerate(out):
+        if prev is not None and l.get("file") == out[prev].get("file"):
+            sid = out[prev]["script_id"]
+            group = "".join(out[j]["text"] for j in last[sid])
+            if _ratio(group + l["text"], text[sid]) > _ratio(group, text[sid]) + SPLIT_GAIN \
+                    and _ratio(out[prev]["text"], l["text"]) < RETAKE_RATIO:
+                l["script_id"] = sid
+                last[sid].append(k)
+                prev = k
+                continue
         best = max(script, key=lambda s: _ratio(l["text"], s["text"]), default=None)
         if best is None or _ratio(l["text"], best["text"]) < SCRIPT_RATIO:
             l.update(skip=True, skip_reason="稿外：口误或闲聊")
             continue
         l["script_id"] = best["id"]
-        if best["id"] in last:
-            out[last[best["id"]]].update(skip=True, skip_reason="重录")
-        last[best["id"]] = k
+        for j in last.get(best["id"], []):
+            out[j].update(skip=True, skip_reason="重录")
+        last[best["id"]] = [k]
+        prev = k
     return out, [s["id"] for s in script if s["id"] not in last]
 
 
@@ -200,13 +214,18 @@ def timeline(plan, silences, file_durs, opts):
     def _emit(src_end):
         nonlocal cursor
         d = src_end - seg["src_us"]
+        if d <= 0:
+            raise ValueError(f"旁白时间线算出了 {d / US:.2f}s 的音频段（{seg['fid']} @ {seg['src_us'] / US:.2f}s），"
+                             "检查 narration_plan.json 里这附近句子的 start / end 和顺序")
         audio.append({"fid": seg["fid"], "src_us": seg["src_us"], "start_us": seg["start_us"], "dur_us": d,
                       "fade_in_us": fade, "fade_out_us": fade})
         cursor = seg["start_us"] + d
 
     for it in plan["items"]:
         if it.get("skip"):
-            if it.get("type") == "line" and prev is not None and it.get("file") == prev["file"]:
+            # 只有源时间夹在上一句之后的跳过句才需要剪掉；挪到别处的跳过句与这一段音频无关
+            if it.get("type") == "line" and prev is not None and it.get("file") == prev["file"] \
+                    and _us(it["start"]) >= _us(prev["end"]):
                 skipped_since.append(it)
             continue
         if it["type"] == "live":
@@ -218,12 +237,13 @@ def timeline(plan, silences, file_durs, opts):
             last_kind = "live"
             continue
         fid, s, e = it["file"], _us(it["start"]), _us(it["end"])
-        same = prev is not None and fid == prev["file"] and s >= _us(prev["end"])
+        same = prev is not None and fid == prev["file"] and s >= _us(prev["end"]) - _us(OVERLAP_TOL)
         if same:
+            skipped_since = [k for k in skipped_since if _us(k["end"]) <= s]
             pe = _us(prev["end"])
-            p = s - pe
+            p = max(0, s - pe)
             if skipped_since:
-                p = min(_us(skipped_since[0]["start"]) - pe, s - _us(skipped_since[-1]["end"]))
+                p = max(0, min(_us(skipped_since[0]["start"]) - pe, s - _us(skipped_since[-1]["end"])))
             if prev.get("pause_after") is not None:
                 pp = _us(prev["pause_after"])
             else:
@@ -395,7 +415,8 @@ def layout(plan, clips, speech, silences, file_durs, opts):
         if prev_shot is not None and (L < MIN_SHOT or not vis):
             if not vis:
                 report["unpaired"].append(it["id"])
-            if _extend(prev_shot, L):
+            # 原声段的画面就是用户给的那段声音，不能延长（会把范围外的原声以人声音量带进旁白）
+            if prev_shot["kind"] != "live" and _extend(prev_shot, L):
                 continue
         j = line_slots.index(k)
         neighbours = [v for jj in (j - 1, j + 1) if 0 <= jj < len(line_slots)
@@ -432,8 +453,10 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                     report["fallback"].append((it["id"], shot["clip"].clip_id))
                 got.append(placed)
                 remaining -= placed["dur_us"]
-                if 0 < remaining < MIN_SHOT and _extend(placed, remaining):
-                    remaining = 0
+                if 0 < remaining < MIN_SHOT:
+                    # 零头不单独成镜头：并进本槽里能延长的镜头（延长前面的镜头只是把后面的往后推）
+                    if any(_extend(g, remaining) for g in reversed(got)):
+                        remaining = 0
         shots[k] = got
         prev_shot = got[-1]
 

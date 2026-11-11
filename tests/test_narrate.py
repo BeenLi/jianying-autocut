@@ -397,3 +397,47 @@ def test_main_draft_refuses_overwrite(tmp_path):
     assert main(["--work", w, "--draft", "--force"]) == 0
     p = json.loads((tmp_path / "narration_plan.json").read_text())
     assert [i["text"] for i in p["items"]] == ["出发", "到了"]
+
+
+# ---------- 终审修复 ----------
+
+def test_timeline_skip_out_of_order_ignored():                 # Critical 1
+    tl = _tl(_line("A", 20.0, 22.0), _line("R", 10.0, 12.0, skip=True), _line("B", 24.0, 26.0))
+    assert all(a["dur_us"] > 0 for a in tl["audio"])
+    assert _segs(tl)[0][1] == us(22.6)                        # 停顿 2.0 → 1.2，剪口在中间
+
+
+def test_timeline_small_overlap_stays_in_block():              # Important 3
+    tl = _tl(_line("A", 1.0, 5.0), _line("B", 4.95, 8.0))
+    assert _segs(tl) == [(us(0.7), us(8.3), us(1.0))]
+
+
+def test_empty_visuals_after_live_does_not_extend_live():      # Important 2
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c2", 30.0, 34.0),
+             _line("L2", 2.0, 4.0, file="n2")]
+    rows, track, rep = _lay(items, _clips(("c1", 60), ("c2", 60)))
+    live = [r for r in rows if r["kind"] == "live"]
+    assert len(live) == 1 and live[0]["dur_us"] == us(4.0)
+    assert rows[-1]["kind"] == "narr" and "L2" in rep["unpaired"]
+    _rows_ok(rows, track["total_us"])
+
+
+def test_no_crumb_shots_shorter_than_min_shot():               # Important 6
+    rows, track, _ = _lay([_line("L1", 1.0, 5.6, visuals=_vis("c1", "c2"))], _clips(("c1", 3), ("c2", 60)))
+    assert all(r["dur_us"] >= 2 * US for r in rows), [(r["source"], r["dur_s"]) for r in rows]
+    _rows_ok(rows, track["total_us"])
+
+
+def test_align_keeps_both_halves_of_split_sentence():          # Important 4
+    script = [{"id": "A", "text": "凌晨四点我们从山脚出发，天还没有亮，只有头灯照着脚下的石阶"}]
+    lines = [_line("L1", 0, 4, text="凌晨四点我们从山脚出发，天还没有亮，"), _line("L2", 4.2, 7, text="只有头灯照着脚下的石阶。")]
+    out, missing = align_to_script(lines, script)
+    assert not any(l.get("skip") for l in out) and [l["script_id"] for l in out] == ["A", "A"] and missing == []
+
+
+def test_align_split_sentence_retaken_drops_whole_first_take():
+    script = [{"id": "A", "text": "凌晨四点我们从山脚出发，天还没有亮，只有头灯照着脚下的石阶"}]
+    lines = [_line("L1", 0, 4, text="凌晨四点我们从山脚出发，天还没有亮，"), _line("L2", 4.2, 7, text="只有头灯照着脚下的石阶。"),
+             _line("L3", 8, 14, text="凌晨四点我们从山脚出发，天还没有亮，只有头灯照着脚下的石阶。")]
+    out, _ = align_to_script(lines, script)
+    assert [bool(l.get("skip")) for l in out] == [True, True, False]

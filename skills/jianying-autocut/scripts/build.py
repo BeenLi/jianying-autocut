@@ -413,7 +413,8 @@ def main():
             sys.exit(f"测响度失败（需要 ffmpeg）：{e}")
     if args.subs:
         with open(args.subs, encoding="utf-8") as f:
-            subs, sub_warns = place_subs(json.load(f), shots)
+            # 旁白片：垫底镜头的原声听不清，只给原声段（live）加字幕
+            subs, sub_warns = place_subs(json.load(f), [s for s in shots if not args.narration or s["kind"] == "live"])
     versions = detect_versions(args.drafts_dir)
     print(f"本机剪映 {versions['app_version']}，草稿版本 {versions['new_version']}"
           f"（读自草稿「{versions['from_draft']}」）")
