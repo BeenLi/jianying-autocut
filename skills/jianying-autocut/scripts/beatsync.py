@@ -252,6 +252,8 @@ def main():
     ap.add_argument("--fade", type=float, default=1.5)
     args = ap.parse_args()
     W = args.work
+    if os.path.exists(os.path.join(W, "narration_track.json")):
+        sys.exit("这是旁白片：镜头时长由旁白决定，不能卡点。用 build.py --bgm 铺 BGM。")
 
     songs = [load_song(os.path.expanduser(p)) for p in args.song]
     if args.analyze:

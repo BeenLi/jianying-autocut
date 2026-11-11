@@ -50,3 +50,52 @@ def test_duck_keyframes_ramp_around_speech_and_merge_close_lines():
 def test_duck_keyframes_clamped_to_segment():
     kf = duck_keyframes([(0, 2 * US)], 0, 10 * US, 0.2, 0.05, ramp=US // 4)
     assert kf[0] == (0, 0.05) and all(0 <= t <= 10 * US for t, _ in kf)
+
+
+# ---------- 旁白模式：BGM 稳定曲线 ----------
+
+from build import bgm_curve
+
+
+def _val(kf, off):
+    """关键帧折线在 off 处的值。"""
+    kf = sorted(kf)
+    if off <= kf[0][0]:
+        return kf[0][1]
+    for (a, va), (b, vb) in zip(kf, kf[1:]):
+        if a <= off <= b:
+            return va if b == a else va + (vb - va) * (off - a) / (b - a)
+    return kf[-1][1]
+
+
+def test_bgm_curve_stays_ducked_through_short_gaps():
+    kf = bgm_curve([(1 * US, 3 * US), (6 * US, 3 * US)], [], [], 0, 12 * US, 0.5, 0.25, total_us=12 * US)
+    assert all(abs(v - 0.125) < 1e-9 for _, v in kf)
+
+
+def test_bgm_curve_rises_on_long_gap_with_asymmetric_ramps():
+    kf = bgm_curve([(1 * US, 3 * US), (10 * US, 2 * US)], [], [], 0, 13 * US, 0.5, 0.25, total_us=13 * US)
+    assert _val(kf, 4 * US) == 0.125 and _val(kf, round(4.8 * US)) == 0.5      # 升起 0.8s
+    assert _val(kf, round(9.7 * US)) == 0.5 and _val(kf, 10 * US) == 0.125     # 压低 0.3s，开口前压好
+    assert _val(kf, 11 * US) == 0.125
+
+
+def test_bgm_curve_drop_and_up():
+    speech = [(1 * US, 3 * US), (6 * US, 3 * US)]
+    kf = bgm_curve(speech, [(4 * US, 2 * US)], [], 0, 12 * US, 0.5, 0.25, total_us=12 * US)
+    assert _val(kf, 5 * US) == 0.5 and _val(kf, 7 * US) == 0.125
+    kf = bgm_curve(speech, [], [(4 * US, 2 * US)], 0, 12 * US, 0.5, 0.25, total_us=12 * US)
+    assert _val(kf, 5 * US) == 0 and _val(kf, 7 * US) == 0.125
+
+
+def test_bgm_curve_offsets_are_segment_relative():
+    kf = bgm_curve([(1 * US, 3 * US), (10 * US, 2 * US)], [], [], 5 * US, 4 * US, 0.5, 0.25, total_us=13 * US)
+    # 片段覆盖成片 5–9s：5s 处已升到 0.5，9.7s 才开始压，所以整段都是 0.5
+    assert kf[0][0] == 0 and kf[-1][0] == 4 * US
+    assert all(v == 0.5 for _, v in kf)
+
+
+def test_duck_keyframes_merge_gap():
+    speech = [(1 * US, 2 * US), (round(4.5 * US), 2 * US)]     # 间隔 1.5s
+    assert len(duck_keyframes(speech, 0, 10 * US, 0.2, 0.05)) == 8
+    assert len(duck_keyframes(speech, 0, 10 * US, 0.2, 0.05, merge_gap=2 * US)) == 4
