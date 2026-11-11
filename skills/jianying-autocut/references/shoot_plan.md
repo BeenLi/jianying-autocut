@@ -43,6 +43,11 @@
 | `matches/<shot_id>` | `clip_id`, `at`, `start`, `end`, `confidence`（high/mid/low）, `reason`, `confirmed`, `by` | 建议 | 确认、改素材或秒数 |
 | `extras/<clip_id>` | `chapter`, `at`, `reason`, `accepted`（null / true / false） | 建议 | 采纳、拒绝 |
 | `requests/<id>` | `text`, `status`（new / done / not_found）, `reply`, `created` | `status`, `reply` | `text` |
+| `lines/<L01…>` | `chapter`, `order`, `kind`（`narr` 旁白 / `live` 这里放原声）, `text`, `shots: [shot_id]`, `est_s`, `edited_by_user` | 旁白稿初稿 | 增删改、关联镜头 |
+| `nmatch/<id>` | `file`, `start`, `end`, `skip`, `skip_reason`, `visuals: [{clip_id, at}]`, `confidence`, `reason`, `confirmed`, `by`；稿外的转写句另有 `chapter`, `order`, `text`；`live` 句用 `clip_id` + `start/end`（素材内秒） | 剪辑时的建议 | 确认、换画面、改时间、跳过 / 恢复 |
+
+旁白片（`plan/meta.kind: "narration"`）的写法和导出见 `narration.md`。`lines.est_s` 留空时页面按约 4 字/秒自己估；
+用户改了 `text` 页面会把 `est_s` 清空。
 
 ### 不覆盖用户的改动
 

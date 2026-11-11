@@ -54,6 +54,8 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 - **拍完以后**：素材照上面的第 1–3 步处理。有拍摄脚本（或你口述的故事）时，第 4 步不由 Claude 编故事，而是把素材对到每个镜头上，
   在同一个页面列出对照（带缩略图）、漏拍的镜头和计划外的好素材。你在页面上确认后，`match.py` 生成 `story_plan.json`，后面照常。
 - 没有自己的故事，就按原来的流程交给 Claude 写。
+- **旁白片**：先录好旁白（拍摄脚本里可以先写旁白稿，页面上有提词器视图），Claude 转写后按每句话配画面，旁白间隙插原声；
+  `narrate.py` 排时间线（J-cut、停顿压缩、重录自动跳过），`build.py --narration` 加旁白轨，人声按 -16 LUFS 归一化，BGM 全片稳定在压低档。
 
 ## 支持的功能
 
@@ -71,7 +73,8 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | 章节标题 | ✅ | 每章开头 3 秒文字 |
 | BGM | ✅ | 多首可选；短于成片自动循环、长于成片截断、首尾淡入淡出 |
 | 人声字幕 | ✅ | Claude 挑出有意义的人声配底部字幕（带底色），说话时 BGM 自动压低；全片逐句字幕仍用剪映「智能字幕」 |
-| AI 配音 / 旁白 | ❌ | 未做 |
+| 自录旁白 | ✅ | 先录旁白，按句配画面、间隙插原声；人声响度归一化，BGM 稳定压低，可标 drop / up |
+| AI 配音（TTS） | ❌ | 未做 |
 | 转场、调色、变速、滤镜 | ❌ | 交给剪映 |
 | 自动导出成片 | ❌ | 剪映 7+ 隐藏了导出控件，只能手动导出 |
 
@@ -165,15 +168,15 @@ uv run --script $S/build.py --work $W --name 我的旅行粗剪 --titles --bgm ~
 - 画面方向按 8 秒一帧抽样判断，抽样之间的画面可能漏判。
 - 多台设备混拍时，若设备时钟没对齐，按拍摄时间的排序会乱；请先自行校正拍摄时间。
 - 章节素材很碎时（全是短镜头），节奏调整也避免不了三连短镜头。
-- 草稿只含视频 / 文字（章节标题、人声字幕）/ BGM 三类轨道；配音、转场、调色都在剪映里完成。
+- 草稿只含视频 / 文字（章节标题、人声字幕）/ 旁白 / BGM 几类轨道；转场、调色都在剪映里完成。
 
 ## 目录结构
 
 ```text
 skills/jianying-autocut/                技能本体（npx skills / 插件安装的就是这个文件夹）
   SKILL.md                              给 Agent 的使用说明（技能入口）
-  scripts/                              probe · frames · transcribe · notes · orient · story · match · plan · beatsync · build · common
-  references/                           写故事指引（story_plan.md）、拍摄脚本页面（shoot_plan.md）、实测踩坑（pitfalls.md）
+  scripts/                              probe · frames · transcribe · notes · orient · story · match · plan · narrate · beatsync · loudness · build · common
+  references/                           写故事指引（story_plan.md）、拍摄脚本页面（shoot_plan.md）、旁白片（narration.md）、实测踩坑（pitfalls.md）
   assets/                               拍摄脚本页面模板（shoot_plan_page.html）
   vendor/video-script-refs/             收录的导演方法文档（MIT，见下方鸣谢）
   vendor/video-script-refs/             video-script 的导演方法文档（MIT）

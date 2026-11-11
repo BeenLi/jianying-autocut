@@ -56,6 +56,10 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
   story: Claude matches footage to each planned shot and lists the matches (with thumbnails), missed shots and good unplanned
   footage on the same page. Once you confirm them there, `match.py` writes `story_plan.json` and the rest runs as usual.
 - No story of your own? Claude writes one, as before.
+- **Voice-over films**: record the narration first (the shooting script can hold a narration draft, and the page has a
+  teleprompter view). Claude transcribes it, picks footage for each sentence and drops live sound into the gaps; `narrate.py`
+  lays out the timeline (J-cuts, compressed pauses, retakes skipped) and `build.py --narration` adds the voice track, normalises
+  speech to -16 LUFS and keeps the music steady under it.
 
 ## Features
 
@@ -73,7 +77,8 @@ https://github.com/user-attachments/assets/e7c27388-6343-4862-a71c-0ee0be00a2b0
 | Chapter titles | ✅ | 3 seconds of text at the start of each chapter |
 | BGM | ✅ | Several tracks allowed; looped if shorter than the video, trimmed if longer, faded in and out |
 | Speech subtitles | ✅ | Claude picks the meaningful lines and adds bottom subtitles on a dark box; the BGM ducks while people talk. For full captions use JianYing's "智能字幕" |
-| AI voice-over / narration | ❌ | Not done |
+| Recorded narration | ✅ | Record first, footage picked per sentence, live sound in the gaps; speech loudness normalised, music held steady underneath, with optional drop / up marks |
+| AI voice-over (TTS) | ❌ | Not done |
 | Transitions, color, speed ramps, filters | ❌ | Left to JianYing |
 | Automatic export | ❌ | JianYing 7+ hides its export controls, so export is manual |
 
@@ -167,15 +172,15 @@ Run the tests: `./run_tests.sh`
 - Orientation is sampled one frame every 8 seconds, so frames between samples can be missed.
 - When several devices were used and their clocks weren't in sync, sorting by capture time goes wrong; fix capture times yourself first.
 - When a chapter's footage is very fragmented (all short shots), rhythm adjustment can't avoid three short shots in a row.
-- Drafts contain only video / text (chapter titles, speech subtitles) / BGM tracks; voice-over, transitions and color are done in JianYing.
+- Drafts contain video / text (chapter titles, speech subtitles) / voice-over / BGM tracks; transitions and color are done in JianYing.
 
 ## Repository layout
 
 ```text
 skills/jianying-autocut/                The skill itself (what npx skills / the plugin installs)
   SKILL.md                              Instructions for the agent (skill entry point)
-  scripts/                              probe · frames · transcribe · notes · orient · story · match · plan · beatsync · build · common
-  references/                           Story-writing guide (story_plan.md), shooting-script page (shoot_plan.md), field-tested pitfalls (pitfalls.md)
+  scripts/                              probe · frames · transcribe · notes · orient · story · match · plan · narrate · beatsync · loudness · build · common
+  references/                           Story-writing guide (story_plan.md), shooting-script page (shoot_plan.md), voice-over films (narration.md), field-tested pitfalls (pitfalls.md)
   assets/                               Shooting-script page template (shoot_plan_page.html)
   vendor/video-script-refs/             Vendored directing-method document (MIT, see Acknowledgements)
   vendor/video-script-refs/             Directing method docs from video-script (MIT)
