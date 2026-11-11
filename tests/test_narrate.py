@@ -178,3 +178,222 @@ def test_timeline_skipped_items_have_no_marks():
 def test_mark_retakes_restart_word_inside_normal_sentence_kept():
     out = mark_retakes([_line("L1", 0, 2, text="我们走着走着发现方向好像不对劲了")])
     assert not out[0].get("skip")
+
+
+# ---------- 铺画面（Task 3） ----------
+
+import json
+import os
+
+import pytest
+
+from common import write_csv
+from narrate import layout, main, slots, split_sub
+from plan import Clip
+
+
+def _clip(cid, dur, bad=False, score=0.8):
+    row = {"clip_id": cid, "path": f"/x/{cid}.mp4", "name": f"{cid}.mp4", "shot_time": "2026-10-05T00:00:00",
+           "duration_s": dur}
+    frames = [(t * US, score, int(bad)) for t in range(int(dur))]
+    return Clip(row, frames, [])
+
+
+def _clips(*specs):
+    return {s[0]: _clip(*s) for s in specs}
+
+
+def _vis(*cids):
+    return [{"clip_id": c} for c in cids]
+
+
+def _live(iid, cid, start, end, **kw):
+    return {"id": iid, "type": "live", "chapter": "ch1", "clip_id": cid, "start": start, "end": end, **kw}
+
+
+def _lay(items, clips, speech=None, **opts):
+    return layout(_plan(*items), clips, speech or {}, {}, {"n1": 60.0, "n2": 60.0}, Opts(**opts))
+
+
+def _rows_ok(rows, total):
+    t = 0
+    for r in rows:
+        assert r["start_us"] == t and r["dur_us"] > 0
+        t += r["dur_us"]
+    assert t == total
+
+
+def test_slots_cover_timeline_without_gaps():
+    items = [_line("L1", 1.0, 3.0), _live("V1", "c7", 30.0, 35.0), _line("L2", 2.0, 4.0, file="n2")]
+    plan = _plan(*items)
+    tl = timeline(plan, {}, {"n1": 60.0, "n2": 60.0}, Opts())
+    sl = slots(tl, plan, Opts())
+    assert [(s["item"], s["start_us"], s["end_us"]) for s in sl] == \
+        [("L1", 0, us(3.6)), ("V1", us(3.6), us(8.6)), ("L2", us(8.6), us(12.7))]
+
+
+def test_slot_jcut_start_is_mouth_minus_lead():
+    plan = _plan(_line("A", 1.0, 3.0), _line("B", 5.0, 7.0))
+    tl = timeline(plan, {}, {"n1": 60.0}, Opts())
+    sl = slots(tl, plan, Opts())
+    assert sl[1]["start_us"] == _mark(tl, "B")["mouth_us"] - us(0.3) == us(4.2)
+
+
+def test_slot_after_live_clamped_to_live_end():          # Review Focus 3
+    plan = _plan(_line("L1", 1.0, 3.0), _live("V1", "c7", 30.0, 35.0), _line("L2", 2.0, 4.0, file="n2"))
+    sl = slots(timeline(plan, {}, {"n1": 60.0, "n2": 60.0}, Opts(lead=0.5)), plan, Opts(lead=0.5))
+    assert sl[2]["start_us"] == sl[1]["end_us"] == us(8.6)
+
+
+def test_live_shot_exact_range():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c7", 30.0, 35.0),
+             _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c2"))]
+    rows, track, _ = _lay(items, _clips(("c1", 40), ("c2", 40), ("c7", 60)))
+    v = rows[1]
+    assert (v["kind"], v["in_us"], v["dur_us"]) == ("live", us(30.0), us(5.0))
+    assert track["live"] == [{"start_us": us(3.6), "dur_us": us(5.0), "clip_id": "c7", "src_us": us(30.0)}]
+    _rows_ok(rows, track["total_us"])
+
+
+def test_line_visual_respects_at_and_marks_used():
+    clips = _clips(("c1", 40))
+    rows, _, _ = _lay([_line("L1", 1.0, 3.0, visuals=[{"clip_id": "c1", "at": 20.0}])], clips)
+    r = rows[0]
+    assert r["in_us"] <= us(20.0) < r["in_us"] + r["dur_us"]
+    assert (r["in_us"], r["in_us"] + r["dur_us"]) in clips["c1"].used
+
+
+def test_live_reserved_before_lines():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c1", 18.0, 23.0),
+             _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c2"))]
+    rows, _, _ = _lay(items, _clips(("c1", 40), ("c2", 40)))
+    a, d = rows[0]["in_us"], rows[0]["dur_us"]
+    assert a + d <= us(18.0) or a >= us(23.0)
+
+
+def test_fallback_order_and_report():
+    items = [_line("L0", 1.0, 3.0, visuals=_vis("c3")), _line("L1", 6.0, 8.0, visuals=_vis("c1")),
+             _line("L2", 11.0, 13.0, visuals=_vis("c2"))]
+    rows, _, rep = _lay(items, _clips(("c1", 40, True), ("c2", 40), ("c3", 40)))
+    assert rows[1]["source"] == "/x/c2.mp4"
+    assert ("L1", "c2") in rep["fallback"]
+
+
+def test_same_clip_never_adjacent():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, visuals=_vis("c1")),
+             _line("L3", 11.0, 13.0, visuals=_vis("c2"))]
+    rows, _, _ = _lay(items, _clips(("c1", 60), ("c2", 60)))
+    srcs = [r["source"] for r in rows]
+    assert all(a != b for a, b in zip(srcs, srcs[1:]))
+
+
+def test_short_slot_merged_into_previous():
+    items = [_line("A", 1.0, 3.0, visuals=_vis("c1")), _line("B", 3.4, 4.0, visuals=_vis("c2")),
+             _line("C", 6.0, 9.0, visuals=_vis("c3"))]
+    rows, track, _ = _lay(items, _clips(("c1", 60), ("c2", 60), ("c3", 60)))
+    assert [r["source"] for r in rows] == ["/x/c1.mp4", "/x/c3.mp4"]
+    _rows_ok(rows, track["total_us"])
+
+
+def test_kind_is_narr_after_pick_one():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, visuals=_vis("c1")),
+             _line("L3", 11.0, 13.0, visuals=_vis("c2", "c3"))]
+    rows, _, rep = _lay(items, _clips(("c1", 40, True), ("c2", 60), ("c3", 60)))
+    assert rows[0]["kind"] == "narr" and rows[0]["source"] in ("/x/c2.mp4", "/x/c3.mp4")
+    assert any(f[0] == "L1" for f in rep["fallback"])
+    assert all(r["kind"] in ("narr", "live") for r in rows)
+
+
+def test_talking_window_deprioritized():
+    speech = {"c1": [{"start": 0.0, "end": 20.0, "text": "你好"}]}
+    clips = _clips(("c1", 40))
+    rows, _, _ = _lay([_line("L1", 1.0, 3.0, visuals=_vis("c1"))], clips, speech)
+    assert rows[0]["in_us"] >= us(20.0)
+    assert all(s == 0.8 for _, s, _ in clips["c1"].frames)    # 降权是临时的
+
+
+def test_chapter_without_clips_errors():
+    with pytest.raises(ValueError, match="ch1"):
+        _lay([_line("L1", 1.0, 3.0, visuals=_vis("c1"))], _clips(("c1", 40, True)))
+
+
+def test_empty_visuals_continue_previous_shot():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0)]
+    rows, track, rep = _lay(items, _clips(("c1", 60)))
+    assert len(rows) == 1 and rep["unpaired"] == ["L2"]
+    _rows_ok(rows, track["total_us"])
+
+
+def test_track_subs_split_long_line():
+    text = "凌晨四点我们从山脚出发，天还没有亮，路上只有头灯和星星。"
+    parts = split_sub(text, 0, us(10.0))
+    assert len(parts) >= 2 and all(len(t) <= 16 for _, _, t in parts)
+    assert sum(d for _, d, _ in parts) == us(10.0) and parts[0][0] == 0
+    assert all(parts[k][0] + parts[k][1] == parts[k + 1][0] for k in range(len(parts) - 1))
+    assert "".join(t for _, _, t in parts) == text
+
+
+def test_track_speech_and_bgm_marks():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c2", 30.0, 35.0, bgm="drop"),
+             _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c3"))]
+    speech = {"c2": [{"start": 31.0, "end": 33.0, "text": "哇"}]}
+    _, track, _ = _lay(items, _clips(("c1", 60), ("c2", 60), ("c3", 60)), speech)
+    assert track["bgm"] == [{"start_us": us(3.6), "dur_us": us(5.0), "mode": "drop"}]
+    assert [us(1.3), us(2.0)] in track["speech"] and [us(4.6), us(2.0)] in track["speech"]
+    assert track["subs"][0] == {"start_us": us(1.3), "dur_us": us(2.0), "text": "L1"}
+
+
+# ---------- CLI ----------
+
+INV = ["clip_id", "path", "name", "folder", "duration_s", "width", "height", "fps", "has_audio", "rotation",
+       "shot_time", "size_mb", "speech_score"]
+
+
+def _work(tmp_path, plan=True):
+    rows = [{"clip_id": c, "path": f"/x/{c}.mp4", "name": f"{c}.mp4", "folder": "x", "duration_s": 60,
+             "width": 1920, "height": 1080, "fps": 30, "has_audio": "True", "rotation": 0,
+             "shot_time": f"2026-10-05T0{i}:00:00", "size_mb": 1, "speech_score": 0} for i, c in enumerate(("c1", "c2"))]
+    write_csv(str(tmp_path / "inventory.csv"), rows, INV)
+    vo = tmp_path / "vo.m4a"
+    vo.write_bytes(b"")
+    speech = {"files": {"n1": str(vo)}, "durations": {"n1": 30.0},
+              "lines": {"n1": [{"start": 1.0, "end": 3.0, "text": "出发"}, {"start": 6.0, "end": 8.0, "text": "到了"}]},
+              "silences": {"n1": []}}
+    (tmp_path / "narration_speech.json").write_text(json.dumps(speech, ensure_ascii=False))
+    if plan:
+        p = {"files": {"n1": str(vo)}, "chapters": [{"id": "ch1", "title": "出发"}],
+             "items": [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, visuals=_vis("c2"))]}
+        (tmp_path / "narration_plan.json").write_text(json.dumps(p, ensure_ascii=False))
+    return str(tmp_path)
+
+
+def test_main_dry_run_writes_nothing(tmp_path, capsys):
+    w = _work(tmp_path)
+    assert main(["--work", w, "--dry-run"]) == 0
+    assert not os.path.exists(os.path.join(w, "shots.csv")) and not os.path.exists(os.path.join(w, "narration_track.json"))
+    assert "L1" in capsys.readouterr().out
+
+
+def test_main_writes_shots_and_track(tmp_path):
+    w = _work(tmp_path)
+    (tmp_path / "shots.prebeat.csv").write_text("x")
+    assert main(["--work", w]) == 0
+    assert os.path.exists(os.path.join(w, "shots.csv")) and not os.path.exists(os.path.join(w, "shots.prebeat.csv"))
+    track = json.loads((tmp_path / "narration_track.json").read_text())
+    assert len(track["audio"]) == 2 and track["audio"][0]["file"].endswith("vo.m4a")
+
+
+def test_main_refuses_on_validation_errors(tmp_path, capsys):
+    w = _work(tmp_path)
+    p = json.loads((tmp_path / "narration_plan.json").read_text())
+    p["items"][0]["visuals"] = _vis("c999")
+    (tmp_path / "narration_plan.json").write_text(json.dumps(p))
+    assert main(["--work", w]) == 1 and "c999" in capsys.readouterr().err
+
+
+def test_main_draft_refuses_overwrite(tmp_path):
+    w = _work(tmp_path)
+    assert main(["--work", w, "--draft"]) == 1
+    assert main(["--work", w, "--draft", "--force"]) == 0
+    p = json.loads((tmp_path / "narration_plan.json").read_text())
+    assert [i["text"] for i in p["items"]] == ["出发", "到了"]
