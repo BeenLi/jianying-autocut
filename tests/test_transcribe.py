@@ -97,3 +97,38 @@ def test_drops_text_repeated_many_times_in_one_clip():
 def test_no_speech_threshold_drops_measured_hallucination():
     out = speech_from_segments([_seg(0, 5, "一句话", no_speech=0.60), _seg(5, 6, "真话", no_speech=0.20)])
     assert [s["text"] for s in out] == ["真话"]
+
+
+# ---------- 旁白入口 ----------
+
+def test_dedupe_false_keeps_retakes():
+    segs = [_seg(i, i + 1, "凌晨四点出发") for i in range(3)]
+    assert len(speech_from_segments(segs, dedupe=False)) == 3
+    assert speech_from_segments(segs) == []
+
+
+def test_dedupe_false_keeps_prompt_echo_like_line():
+    segs = [_seg(0, 1, "庐山两日徒步")]
+    assert speech_from_segments(segs, prompt="以下是普通话的句子。庐山两日徒步") == []
+    assert len(speech_from_segments(segs, prompt="以下是普通话的句子。庐山两日徒步", dedupe=False)) == 1
+
+
+def test_words_attached():
+    s = _seg(0, 1, "你好")
+    s.words = [NS(start=0.1, end=0.4, word="你好")]
+    assert speech_from_segments([s], words=True)[0]["words"] == [{"start": 0.1, "end": 0.4, "word": "你好"}]
+    assert "words" not in speech_from_segments([s])[0]
+
+
+def test_narration_files_sorted_and_filtered(tmp_path):
+    from transcribe import narration_files
+    for n in ("02.m4a", "01.wav", "._01.wav", "a.txt"):
+        (tmp_path / n).write_bytes(b"")
+    assert narration_files(str(tmp_path)) == [str(tmp_path / "01.wav"), str(tmp_path / "02.m4a")]
+    assert narration_files(str(tmp_path / "02.m4a")) == [str(tmp_path / "02.m4a")]
+
+
+def test_assign_file_ids_stable():
+    from transcribe import assign_file_ids
+    assert assign_file_ids(["/b", "/c", "/a"], {"n1": "/a", "n2": "/b"}) == {"n1": "/a", "n2": "/b", "n3": "/c"}
+    assert assign_file_ids(["/x", "/y"], {}) == {"n1": "/x", "n2": "/y"}

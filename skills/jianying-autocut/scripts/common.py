@@ -8,6 +8,7 @@ import subprocess
 
 US = 1_000_000  # 1 秒 = 1,000,000 微秒
 
+AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".aac", ".flac"}
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".mts", ".m2ts", ".mxf"}
 JIANYING_APP = "/Applications/VideoFusion-macOS.app"
 DRAFTS_DIR = os.path.expanduser(
