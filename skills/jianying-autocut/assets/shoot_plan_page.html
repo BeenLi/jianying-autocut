@@ -147,8 +147,10 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
 
   const app = document.getElementById("app");
   const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const num = v => { if (v === null || v === undefined || v === "") return null; if (typeof v === "number") return v;
-    const s = String(v).trim(); if (s.includes(":")) { const [m, x] = s.split(":"); const r = +m * 60 + +x; return isNaN(r) ? null : r; } const r = +s; return isNaN(r) ? null : r; };
+  // 秒数、"m:ss" 或 "h:mm:ss"；每一段都要是非空数字，空白不是 0（与 match.py 的 to_seconds 一致）
+  const num = v => { if (v === null || v === undefined) return null; if (typeof v === "number") return isFinite(v) ? v : null;
+    const parts = String(v).trim().split(":"); if (parts.length > 3 || parts.some(p => !p.trim())) return null;
+    let t = 0; for (const p of parts) { const x = Number(p); if (!isFinite(x)) return null; t = t * 60 + x; } return t; };
   const fmt = v => { const t = num(v); if (t === null) return "—"; const m = Math.floor(t / 60), s = t - m * 60; return `${m}:${s < 10 ? "0" : ""}${(Math.round(s * 10) / 10)}`; };
   const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.id).localeCompare(String(b.id));
   const chapters = () => Object.entries(S.chapters).map(([id, c]) => ({ ...c, id })).sort(byOrder);
@@ -619,8 +621,9 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         return;
       }
       clearDrafts(new RegExp(`^m-(clip|at)-${id}$`));
-      const data = { clip_id: clip, at, start: null, end: null, confirmed: true, by: "user" };
-      write("matches/" + id, S.matches[id] ? data : { ...data, confidence: null, reason: "" }, S.matches[id] ? "update" : "set");
+      // 换了素材，Claude 原来的理由和把握就不对了：一起清掉
+      const data = { clip_id: clip, at, start: null, end: null, confirmed: true, by: "user", confidence: null, reason: "" };
+      write("matches/" + id, data, S.matches[id] ? "update" : "set");
     },
     extra: el => write("extras/" + el.dataset.id, { accepted: el.dataset.v === "1" }),
     "add-line": el => {
@@ -663,7 +666,8 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         return;
       }
       clearDrafts(new RegExp(`^n-(clip|at)-${id}$`));
-      write("nmatch/" + id, { visuals: [at === null ? { clip_id: clip } : { clip_id: clip, at }], confirmed: true, by: "user" });
+      write("nmatch/" + id, { visuals: [at === null ? { clip_id: clip } : { clip_id: clip, at }], confirmed: true, by: "user",
+        confidence: null, reason: "" });
     },
     "retime-n": el => {
       const id = el.dataset.id, a = num(val(`n-start-${id}`)), b = num(val(`n-end-${id}`));
