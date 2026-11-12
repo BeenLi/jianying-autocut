@@ -87,12 +87,17 @@
 
 ## 导出并生成故事（4c）
 
-1. `ArtifactData list` 读出全部 `plan`、`chapters`、`shots`、`matches`、`extras`。
+1. `ArtifactData list` 读出全部 `plan`、`chapters`、`shots`、`matches`、`extras`。`list` 是分页返回的：
+   结果里有 `next` 就带上它继续读下一页，直到没有 `next`，每个集合都读完再写 JSON（只读第一页会悄悄丢镜头）。
 2. 写 `W/shoot_plan.json`：`{"meta": {...}, "chapters": [{"id": ..., ...}], "shots": [{"id": ..., ...}]}`（文档 id 放进 `id` 字段）。
 3. 写 `W/matches.json`：`{"matches": {"S01": {...}}, "extras": {"c020": {...}}}`。
 4. `uv run --script $S/match.py --work W`：
    - 有未确认的匹配会报错：请用户回页面确认（或把那个镜头标成漏拍），重新导出。
    - 报告里的漏拍、整章删除、待决定的计划外素材，都转述给用户。
+   - `⚠ cXXX @a 和 @b 离得太近`：两章用了同一素材里挨得很近的两个瞬间，前一章的镜头会先拿走这段，后一章的 pin 会被跳过。
+     请用户给其中一个换素材，或在页面上把秒数挪开。
+   - `⚠ 计划外素材 … accepted 不是 true / false / null`：数据被写坏了，按待决定处理；在页面上重新点一次采纳或不要。
+   - 秒数可以写 `15`、`1:05` 或 `1:05:00`；空白不等于 0。
    - `⚠ 口播 … 会被剪断`：镜头长度由章节节奏决定，整句比本章最长镜头还长。把这章 `rhythm` 改成 `slow`（页面上改章）后重新导出，
      或请用户换一遍说得更短的。
 5. 接着 `story.py --work W --check`，再进第 5 步。

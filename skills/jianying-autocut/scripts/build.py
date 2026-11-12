@@ -36,7 +36,7 @@ import pyJianYingDraft as jy
 from pyJianYingDraft import Timerange, TrackSpec, TrackType
 
 import loudness
-from common import DRAFTS_DIR, US, detect_versions, jianying_running, read_csv
+from common import DRAFTS_DIR, US, detect_versions, jianying_running, load_json, read_csv
 
 TITLE_US = 3 * US
 MIN_BGM_TAIL = 1 * US
@@ -211,6 +211,35 @@ def bgm_mix(cache, bgms, songs, total, speech):
     return plans, loudness.bgm_duck(levels)
 
 
+def bgm_plan_mix(cache, plan):
+    """卡点 BGM（bgm_plan.json）→ 与 bgm_mix 相同的 [(segs, 基础增益, 实测)]，同一首歌只测一次。"""
+    meas = {}
+    out = []
+    for b in plan:
+        if b["path"] not in meas:
+            meas[b["path"]] = cache.measure(b["path"])
+        out.append(([(int(b["start_us"]), int(b["src_us"]), int(b["dur_us"]))], b["gain"], meas[b["path"]]))
+    return out
+
+
+def talk_voice_levels(cache, subs, shots):
+    """口播片每句人声的实际响度：每段素材只测一次（镜头用到的区间），再按句子区间做能量平均。"""
+    ranges = {}
+    for s in shots:
+        a, b = int(s["in_us"]), int(s["in_us"]) + int(s["dur_us"])
+        lo, hi = ranges.get(s["source"], (a, b))
+        ranges[s["source"]] = (min(lo, a), max(hi, b))
+    meas = {p: (lo, cache.measure(p, round(lo / US, 3), round(hi / US, 3))) for p, (lo, hi) in ranges.items()}
+    out = []
+    for t0, d, _ in subs:
+        shot = next(s for s in shots if int(s["start_us"]) <= t0 < int(s["start_us"]) + int(s["dur_us"]))
+        lo, m = meas[shot["source"]]
+        a = int(shot["in_us"]) + t0 - int(shot["start_us"]) - lo       # 测量从 lo 开始，时间戳相对 lo
+        v = loudness.mean_short(m["short"], a / US, (a + d) / US)
+        out.append(m["i"] if v is None else v)
+    return out
+
+
 def bgm_level_fn(plans, duck):
     """(a_us, b_us) → 这段时间里 BGM 的实际最大短时响度（已含增益和压低）；没有 BGM 返回 None。"""
     def f(a, b):
@@ -356,7 +385,8 @@ def main():
     ap.add_argument("--work", required=True)
     ap.add_argument("--name", required=True, help="草稿名（剪映首页显示的名字）")
     ap.add_argument("--drafts-dir", default=DRAFTS_DIR, help="剪映「全局设置 → 草稿位置」")
-    ap.add_argument("--volume", type=float, help="原声音量，0 = 静音；默认 1，有 BGM 时 0.6")
+    ap.add_argument("--volume", type=float, help="原声音量，0 = 静音；默认 1，有 BGM 时 0.6。"
+                    "旁白片里是旁白下垫底镜头的音量（默认按实测响度自动算，最多 0.15）")
     ap.add_argument("--bgm", action="append", default=[], help="歌曲路径[:音量[:淡入淡出秒]]，可多次")
     ap.add_argument("--bgm-plan", help="beatsync.py 生成的 bgm_plan.json（卡点）；给了就不用 --bgm")
     ap.add_argument("--titles", action="store_true", help="每章开头加 3 秒章节标题（文字轨）")
@@ -366,6 +396,11 @@ def main():
     args = ap.parse_args()
     if args.narration and args.bgm_plan:
         sys.exit("旁白片不卡点：镜头时长由旁白决定，用 --bgm 铺 BGM，不要用 --bgm-plan")
+    if args.bgm_plan and args.bgm:
+        sys.exit("--bgm-plan 已经包含了歌（卡点的结果），不要再给 --bgm；二选一")
+    # 用户写的 JSON 先读：写坏了在动旧草稿之前就退出
+    bgm_plan = load_json(args.bgm_plan, kind=list) if args.bgm_plan else None
+    orientation = load_json(os.path.join(args.work, "orientation.json"), default={}, kind=dict)
 
     if jianying_running():
         sys.exit("剪映正在运行。请 ⌘Q 完全退出剪映后再跑（它退出时会把打开过的草稿重新加密覆盖）。")
@@ -396,25 +431,23 @@ def main():
     subs, sub_warns = [], []
     narr = None
     if args.narration:
-        with open(args.narration, encoding="utf-8") as f:
-            narr = json.load(f)
-        with open(os.path.join(args.work, "narration_speech.json"), encoding="utf-8") as f:
-            vo = json.load(f)
+        narr = load_json(args.narration, kind=dict)
+        vo = load_json(os.path.join(args.work, "narration_speech.json"), kind=dict)
         vo_durs = {p: round(vo["durations"][fid] * US) for fid, p in vo["files"].items() if fid in vo["durations"]}
         missing_vo = [a["file"] for a in narr["audio"] if a["file"] not in vo_durs or not os.path.exists(a["file"])]
         if missing_vo:
             sys.exit(f"旁白文件不存在或没转写过：{missing_vo[:3]}")
         sp = os.path.join(args.work, "speech.json")
-        speech_json = json.load(open(sp, encoding="utf-8")) if os.path.exists(sp) else {}
+        speech_json = load_json(sp, default={}, kind=dict)
         cache = loudness.Cache(args.work)
         try:
             vo_gain, live_gain, bed, voice_level, mix_notes = narration_mix(cache, narr, shots, inv, speech_json)
         except (OSError, subprocess.SubprocessError) as e:
             sys.exit(f"测响度失败（需要 ffmpeg）：{e}")
     if args.subs:
-        with open(args.subs, encoding="utf-8") as f:
-            # 旁白片：垫底镜头的原声听不清，只给原声段（live）加字幕
-            subs, sub_warns = place_subs(json.load(f), [s for s in shots if not args.narration or s["kind"] == "live"])
+        # 旁白片：垫底镜头的原声听不清，只给原声段（live）加字幕
+        subs, sub_warns = place_subs(load_json(args.subs, kind=dict),
+                                     [s for s in shots if not args.narration or s["kind"] == "live"])
     versions = detect_versions(args.drafts_dir)
     print(f"本机剪映 {versions['app_version']}，草稿版本 {versions['new_version']}"
           f"（读自草稿「{versions['from_draft']}」）")
@@ -440,11 +473,7 @@ def main():
     stamp_versions(script, os.path.join(draft_dir, "draft_meta_info.json"), versions)
 
     # 第 3 步判定整段倒装的素材（运动相机倒挂等）：片段转 180°
-    rotate = {}
-    op = os.path.join(args.work, "orientation.json")
-    if os.path.exists(op):
-        with open(op, encoding="utf-8") as f:
-            rotate = {c: d.get("rotate", 0) for c, d in json.load(f).get("clips", {}).items()}
+    rotate = {c: d.get("rotate", 0) for c, d in orientation.get("clips", {}).items()}
     main_track = script.append_track(TrackSpec(TrackType.video, "主轨"))
     mats = {}
     for s in shots:
@@ -512,8 +541,7 @@ def main():
 
     bgm_count = 0
     if args.bgm_plan:
-        with open(args.bgm_plan, encoding="utf-8") as f:
-            plan = json.load(f)
+        plan = bgm_plan
         bgm_track = script.append_track(TrackSpec(TrackType.audio, "BGM"))
         for b in plan:
             mat = jy.AudioMaterial(b["path"])
@@ -528,7 +556,10 @@ def main():
     elif bgms and narr is not None:
         bgm_track = script.append_track(TrackSpec(TrackType.audio, "BGM"))
         songs = [jy.AudioMaterial(b["path"]) for b in bgms]
-        plans, duck_ratio = bgm_mix(cache, bgms, songs, total, speech)
+        try:
+            plans, duck_ratio = bgm_mix(cache, bgms, songs, total, speech)
+        except (OSError, subprocess.SubprocessError) as e:
+            sys.exit(f"测 BGM 响度失败（需要 ffmpeg，或歌曲文件坏了）：{e}")
         ups = [(x["start_us"], x["dur_us"]) for x in narr["bgm"] if x["mode"] == "up"]
         drops = [(x["start_us"], x["dur_us"]) for x in narr["bgm"] if x["mode"] == "drop"]
         for b, mat, (segs, base, _) in zip(bgms, songs, plans):
@@ -580,15 +611,11 @@ def main():
 
     script.save()  # 不传 inline_materials：素材只记路径
 
-    if narr is None and bgms and subs:   # 口播片也查一遍：人声要比同时段 BGM 高 ≥ 12 LU
+    if narr is None and (bgms or bgm_plan) and subs:   # 口播片也查一遍：人声要比同时段 BGM 高 ≥ 12 LU
         try:
             cache = loudness.Cache(args.work)
-            plans, _ = bgm_mix(cache, bgms, songs, total, speech)
-            voice = []
-            for t0, d, _ in subs:
-                shot = next(s for s in shots if int(s["start_us"]) <= t0 < int(s["start_us"]) + int(s["dur_us"]))
-                a = (int(shot["in_us"]) + t0 - int(shot["start_us"])) / US
-                voice.append(cache.measure(shot["source"], round(a, 3), round(a + d / US, 3))["i"])
+            plans = bgm_plan_mix(cache, bgm_plan) if bgm_plan else bgm_mix(cache, bgms, songs, total, speech)[0]
+            voice = talk_voice_levels(cache, subs, shots)
             for w_ in loudness.margin_warnings(speech, bgm_level_fn(plans, DUCK), voice):
                 sub_warns.append(w_)
         except (OSError, subprocess.SubprocessError, StopIteration):

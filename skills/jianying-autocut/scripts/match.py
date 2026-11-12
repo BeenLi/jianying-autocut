@@ -13,11 +13,12 @@
 """
 import argparse
 import json
+import math
 import os
 import sys
 
-from common import read_csv
-from plan import FUNCTION_RHYTHM, RHYTHMS
+from common import US, load_json, read_csv
+from plan import FUNCTION_RHYTHM, GAP, RHYTHMS
 from story import validate as story_validate
 
 MERGE_S = 1.0     # 同章同素材两个 pin 相差不到 1 秒：plan.py 会因窗口已占用跳过第二个，这里先合并并报出来
@@ -25,28 +26,29 @@ MERGE_S = 1.0     # 同章同素材两个 pin 相差不到 1 秒：plan.py 会�
 
 def load_inputs(work):
     """返回 (shoot_plan, matches, durations)；durations 是 clip_id → 素材时长（秒）。"""
-    with open(os.path.join(work, "shoot_plan.json"), encoding="utf-8") as f:
-        shoot_plan = json.load(f)
-    with open(os.path.join(work, "matches.json"), encoding="utf-8") as f:
-        matches = json.load(f)
+    shoot_plan = load_json(os.path.join(work, "shoot_plan.json"), kind=dict)
+    matches = load_json(os.path.join(work, "matches.json"), kind=dict)
     durations = {r["clip_id"]: float(r["duration_s"]) for r in read_csv(os.path.join(work, "inventory.csv"))}
     return shoot_plan, matches, durations
 
 
 def to_seconds(v):
-    """数字、数字字符串或 "m:ss" → 秒；解析不了返回 None（页面输入框可能把秒数存成字符串）。"""
+    """数字、数字字符串、"m:ss" 或 "h:mm:ss" → 秒；解析不了返回 None（页面输入框可能把秒数存成字符串）。
+    规则与页面的 num() 一致：每一段都要是非空的数字。"""
     if isinstance(v, bool) or v is None:
         return None
     if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip()
+        return float(v) if math.isfinite(v) else None
+    parts = str(v).strip().split(":")
+    if len(parts) > 3 or any(not p.strip() for p in parts):
+        return None
     try:
-        if ":" in s:
-            m, sec = s.split(":", 1)
-            return int(m) * 60 + float(sec)
-        return float(s)
+        t = 0.0
+        for p in parts:
+            t = t * 60 + float(p)
     except ValueError:
         return None
+    return t if math.isfinite(t) else None
 
 
 def _check_at(prefix, cid, at, durations, errs):
@@ -60,8 +62,28 @@ def _check_at(prefix, cid, at, durations, errs):
     return t
 
 
-def validate(shoot_plan, matches, durations):
+def _structure_errors(shoot_plan, matches):
+    """数据结构本身不对时（页面导出或手写出错），先报出来，免得后面 KeyError。"""
     errs = []
+    for key in ("chapters", "shots"):
+        v = shoot_plan.get(key, [])
+        if not isinstance(v, list):
+            errs.append(f"shoot_plan.json 的 {key} 应该是列表")
+            continue
+        for k, x in enumerate(v, 1):
+            if not isinstance(x, dict) or not x.get("id"):
+                errs.append(f"shoot_plan.json 的 {key} 第 {k} 项缺 id")
+    for key in ("matches", "extras"):
+        v = matches.get(key, {})
+        if not isinstance(v, dict) or not all(isinstance(x, dict) for x in v.values()):
+            errs.append(f"matches.json 的 {key} 应该是 {{id: {{…}}}} 形式的对象")
+    return errs
+
+
+def validate(shoot_plan, matches, durations):
+    errs = _structure_errors(shoot_plan, matches)
+    if errs:
+        return errs
     chapters = {ch["id"]: ch for ch in shoot_plan.get("chapters", [])}
     for ch in chapters.values():
         if ch.get("function") not in FUNCTION_RHYTHM:
@@ -86,6 +108,8 @@ def validate(shoot_plan, matches, durations):
             errs.append(f"{prefix}：还没确认，请先在页面上确认或删除")
 
     for cid, x in matches.get("extras", {}).items():
+        if x.get("accepted") is not True:      # 还没决定或已拒绝的不进成片，数据有误也不挡生成
+            continue
         prefix = f"计划外素材 {cid}"
         if x.get("chapter") not in chapters:
             errs.append(f"{prefix}：章 {x.get('chapter')} 不存在")
@@ -99,10 +123,12 @@ def build_story_plan(shoot_plan, matches):
     confirmed = {sid: m for sid, m in matches.get("matches", {}).items() if m.get("confirmed") is True}
     extras = matches.get("extras", {})
     report = {"missing": {}, "dropped_chapters": [], "rejected_extras": 0, "merged_pins": [], "long_talk": [],
-              "pending_extras": [cid for cid, x in extras.items() if x.get("accepted") is None]}
+              "pending_extras": [cid for cid, x in extras.items() if x.get("accepted") is None],
+              "odd_extras": [cid for cid, x in extras.items() if x.get("accepted") not in (True, False, None)],
+              "cross_pins": []}
     report["rejected_extras"] = sum(1 for x in extras.values() if x.get("accepted") is False)
 
-    out = []
+    out, placed = [], []
     for ch in sorted(shoot_plan.get("chapters", []), key=lambda c: (c.get("order", 0), c["id"])):
         wanted = []
         for s in shots:
@@ -130,6 +156,14 @@ def build_story_plan(shoot_plan, matches):
         if not pins:
             report["dropped_chapters"].append(ch["id"])
             continue
+        # 跨章同素材：plan.py 按章序放 pin，前一章的镜头以 pin 为中心、最长到本章节奏上限，
+        # 加上同素材间隔 GAP，后一章落在这个范围里的 pin 会因为窗口被占而跳过
+        reach = max(hi for _, _, hi in RHYTHMS[ch.get("rhythm") or FUNCTION_RHYTHM[ch["function"]]]) / 2 + GAP / US
+        for p in pins:
+            for prev_ch, q, prev_reach in placed:
+                if q["clip_id"] == p["clip_id"] and abs(q["at"] - p["at"]) < prev_reach:
+                    report["cross_pins"].append((p["clip_id"], q["at"], prev_ch, p["at"], ch["id"]))
+        placed += [(ch["id"], p, reach) for p in pins]
         c = {"id": ch["id"], "title": ch.get("title", ch["id"]), "function": ch["function"]}
         if ch.get("rhythm"):
             c["rhythm"] = ch["rhythm"]
@@ -150,6 +184,11 @@ def _print_report(shoot_plan, story, report, durations, out_path):
               f"（请在页面上采纳或拒绝）")
     if report["rejected_extras"]:
         print(f"计划外素材已拒绝 {report['rejected_extras']} 段")
+    for cid in report["odd_extras"]:
+        print(f"⚠ 计划外素材 {cid} 的 accepted 不是 true / false / null，按待决定处理（没进成片）")
+    for cid, a, ch_a, b, ch_b in report["cross_pins"]:
+        print(f"⚠ {cid} @{a:g}s（{titles.get(ch_a, ch_a)}）和 @{b:g}s（{titles.get(ch_b, ch_b)}）离得太近："
+              f"前一章会先拿走这段，后一章的这个 pin 会被跳过。换一段素材，或把其中一个时间点挪开")
     for cid, kept, dropped in report["merged_pins"]:
         print(f"合并了相差不到 {MERGE_S:g} 秒的 pin：{cid} @{kept:g} / {dropped:g}")
     for sid, length, longest in report["long_talk"]:

@@ -27,13 +27,12 @@
 所有时间内部都是整数微秒；挑不满的章节把差额外溢给有余量的章节，总长一微秒都不差。
 """
 import argparse
-import json
 import os
 import random
 import sys
 from collections import defaultdict
 
-from common import US, read_csv, write_csv
+from common import US, load_json, read_csv, write_csv
 
 RHYTHM = [("long", 12, 18), ("short", 3, 6), ("short", 3, 6), ("mid", 6, 9)]
 # 章节可写 "rhythm": 名字。slow 让内容落地，fast 往前推，montage 整章 2-4s 快切（混剪开头）
@@ -162,10 +161,8 @@ def load_clips(work):
     # 第 3 步判出的歪倒帧（orientation.json）同样当坏帧
     tilted = {}
     op = os.path.join(work, "orientation.json")
-    if os.path.exists(op):
-        with open(op, encoding="utf-8") as f:
-            tilted = {cid: {round(t * 100) for t in d.get("bad", [])}
-                      for cid, d in json.load(f).get("clips", {}).items()}
+    tilted = {cid: {round(t * 100) for t in d.get("bad", [])}
+              for cid, d in load_json(op, default={}, kind=dict).get("clips", {}).items()}
     frames = defaultdict(list)
     fp = os.path.join(work, "frames.csv")
     if os.path.exists(fp):
@@ -174,9 +171,8 @@ def load_clips(work):
             frames[f["path"]].append((round(float(f["t"]) * US), float(f["score"]), int(bad)))
     sil = {}
     sp = os.path.join(work, "silences.json")
-    if os.path.exists(sp):
-        with open(sp, encoding="utf-8") as f:
-            sil = {k: [(round(a * US), round(b * US)) for a, b in v] for k, v in json.load(f).items()}
+    sil = {k: [(round(a * US), round(b * US)) for a, b in v]
+           for k, v in load_json(sp, default={}, kind=dict).items()}
     clips = {r["clip_id"]: Clip(r, frames.get(r["path"], []), sil.get(r["clip_id"], []))
              for r in read_csv(os.path.join(work, "inventory.csv"))}
     return clips, bool(frames)
@@ -423,8 +419,7 @@ def _sort(shots):
 def load_story(work):
     """inventory + story_plan → (clips, chapters)。"""
     clips, _ = load_clips(work)
-    with open(os.path.join(work, "story_plan.json"), encoding="utf-8") as f:
-        story = json.load(f)
+    story = load_json(os.path.join(work, "story_plan.json"), kind=dict)
     # pool=all 指「故事里出现过的全部素材」：被 --exclude 剔掉、没进任何章节的素材绝不回来
     in_story = [c for c in clips if any(c in ch.get("clip_ids", []) for ch in story["chapters"])]
     chapters = []

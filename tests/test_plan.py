@@ -361,3 +361,14 @@ def test_fixed_mode_shared_clip_shots_do_not_overlap(tmp_path):
     spans = sorted((r["in_us"], r["in_us"] + r["dur_us"]) for r in rows if r["name"] == "c001.mp4")
     assert len(spans) >= 2
     assert all(a_end <= b_start for (_, a_end), (b_start, _) in zip(spans, spans[1:]))
+
+
+def test_broken_story_plan_json_is_readable_error(tmp_path):      # A4
+    import pytest
+
+    from plan import load_story
+    w = _work(tmp_path, [("c001", 30, 0)], [_ch("ch1", ["c001"])])
+    (tmp_path / "story_plan.json").write_text('{"chapters": [\n  {"id": "ch1",}\n]}')
+    with pytest.raises(SystemExit) as e:
+        load_story(w)
+    assert "story_plan.json" in str(e.value) and "第 2 行" in str(e.value)

@@ -99,3 +99,37 @@ def test_duck_keyframes_merge_gap():
     speech = [(1 * US, 2 * US), (round(4.5 * US), 2 * US)]     # 间隔 1.5s
     assert len(duck_keyframes(speech, 0, 10 * US, 0.2, 0.05)) == 8
     assert len(duck_keyframes(speech, 0, 10 * US, 0.2, 0.05, merge_gap=2 * US)) == 4
+
+
+# ---------- 小问题修复 ----------
+
+from build import bgm_plan_mix, talk_voice_levels
+
+
+class _FakeCache:
+    def __init__(self):
+        self.calls = []
+
+    def measure(self, path, start=None, end=None):
+        self.calls.append((path, start, end))
+        return {"i": -20.0, "tp": -3.0, "short": [(t / 10, -20.0 if t < 50 else -40.0) for t in range(0, 200)]}
+
+
+def test_talk_voice_levels_measure_each_source_once():            # B7
+    shots = [{"source": "/a.mp4", "in_us": 0, "dur_us": 10 * US, "start_us": 0},
+             {"source": "/b.mp4", "in_us": 2 * US, "dur_us": 5 * US, "start_us": 10 * US}]
+    subs = [(1 * US, 2 * US, "x"), (6 * US, 2 * US, "y"), (11 * US, 1 * US, "z")]
+    cache = _FakeCache()
+    levels = talk_voice_levels(cache, subs, shots)
+    assert sorted(p for p, _, _ in cache.calls) == ["/a.mp4", "/b.mp4"]
+    assert levels[0] == -20.0 and levels[1] == -40.0            # 每句按自己区间的短时响度取值，不是整段最大
+
+
+def test_bgm_plan_mix_shapes_segments():                           # C3
+    cache = _FakeCache()
+    plan = [{"path": "/s.mp3", "start_us": 0, "dur_us": 5 * US, "src_us": US, "gain": 0.3, "fade": 1.0},
+            {"path": "/s.mp3", "start_us": 5 * US, "dur_us": 5 * US, "src_us": 9 * US, "gain": 0.3, "fade": 1.0}]
+    plans = bgm_plan_mix(cache, plan)
+    assert len(cache.calls) == 1
+    assert [segs for segs, _, _ in plans] == [[(0, US, 5 * US)], [(5 * US, 9 * US, 5 * US)]]
+    assert all(base == 0.3 for _, base, _ in plans)

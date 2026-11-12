@@ -22,7 +22,7 @@ import re
 import subprocess
 from collections import Counter
 
-from common import AUDIO_EXTS, VIDEO_EXTS, read_csv
+from common import AUDIO_EXTS, VIDEO_EXTS, load_json, read_csv
 
 MAX_NO_SPEECH = 0.5    # Whisper 认为「这段不是人声」的概率高于此值就丢弃。实测真话 0.02–0.20，幻听 0.60
 BASE_PROMPT = "以下是普通话的句子。"   # 让中文输出简体并带标点
@@ -80,8 +80,7 @@ def transcribe_clips(rows, model, out_path, language=None, context="", force=Fal
     """逐段转写并落盘，返回 {clip_id: speech}。转写失败的素材只报告，不写入结果，重跑时会再试。"""
     result = {}
     if os.path.exists(out_path) and not force:
-        with open(out_path, encoding="utf-8") as f:
-            result = json.load(f)
+        result = load_json(out_path, kind=dict)
     prompt = f"{BASE_PROMPT}{context}" if context else BASE_PROMPT
     for i, r in enumerate(rows, 1):
         cid = r["clip_id"]
@@ -137,8 +136,7 @@ def transcribe_narration(paths, model, out_path, language=None, context="", forc
     from probe import analyze_audio
     result = {"files": {}, "durations": {}, "lines": {}, "silences": {}, "stamps": {}}
     if os.path.exists(out_path) and not force:
-        with open(out_path, encoding="utf-8") as f:
-            result = json.load(f)
+        result = load_json(out_path, kind=dict)
     result["files"] = assign_file_ids(paths, result.get("files", {}))
     result.setdefault("stamps", {})
     prompt = f"{BASE_PROMPT}{context}" if context else BASE_PROMPT
