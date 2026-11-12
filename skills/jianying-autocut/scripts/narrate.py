@@ -24,7 +24,7 @@ import sys
 from dataclasses import dataclass, fields
 
 from common import US, load_json
-from plan import EDGE, FIELDS, MIN_SHOT, fmt, load_clips, pick_one, place_pin, write_shots
+from plan import EDGE, MIN_SHOT, fmt, load_clips, pick_one, place_pin, write_shots
 
 RESTART_WORDS = ("重来", "不对", "再来一遍")
 RETAKE_RATIO = 0.8       # 两句相似到这个程度，就当作同一句录了两遍
@@ -257,7 +257,7 @@ def timeline(plan, silences, file_durs, opts):
     last_kind = None
 
     def close_block():
-        nonlocal seg, cursor
+        nonlocal seg
         if seg is None:
             return
         fid = seg["fid"]

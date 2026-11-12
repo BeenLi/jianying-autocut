@@ -93,3 +93,52 @@ def test_cache_key_extra_separates_ranges(tmp_path):
     c = Cache(str(tmp_path))
     c.put(str(f), {"i": -30.0, "tp": -9.0}, key_extra="1.0-3.0")
     assert c.get(str(f)) is None and c.get(str(f), key_extra="1.0-3.0")["i"] == -30.0
+
+
+# ---------- 小问题修复 ----------
+
+import subprocess
+
+import pytest
+
+import loudness
+from loudness import mean_short
+
+
+def test_measure_raises_when_ffmpeg_fails(monkeypatch):         # B6
+    monkeypatch.setattr(loudness.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "No such file"))
+    with pytest.raises(subprocess.CalledProcessError):
+        loudness.measure("/nope.m4a")
+
+
+def test_cached_empty_measurement_is_remeasured(tmp_path, monkeypatch):
+    f = tmp_path / "vo.m4a"
+    f.write_bytes(b"x")
+    c = Cache(str(tmp_path))
+    c.put(str(f), {"i": -70.0, "tp": -70.0, "short": []})      # 旧版本缓存下的失败结果
+    monkeypatch.setattr(loudness, "measure", lambda p, a=None, b=None: {"i": -20.0, "tp": -3.0, "short": [(0.1, -20.0)]})
+    assert c.measure(str(f))["i"] == -20.0
+
+
+def test_cache_prunes_stale_keys_of_same_path(tmp_path):        # B10
+    f = tmp_path / "vo.m4a"
+    f.write_bytes(b"x")
+    c = Cache(str(tmp_path))
+    c.put(str(f), {"i": -1.0}, key_extra="1-2")
+    c.put(str(f), {"i": -2.0})
+    st = os.stat(f)
+    os.utime(f, (st.st_atime, st.st_mtime + 10))
+    c.put(str(f), {"i": -3.0})
+    assert len(c.data) == 1 and list(c.data.values()) == [{"i": -3.0}]
+
+
+def test_cache_corrupt_file_starts_fresh(tmp_path):
+    (tmp_path / "loudness.json").write_text("{bad")
+    assert Cache(str(tmp_path)).data == {}
+
+
+def test_mean_short_is_energy_mean():                           # B7
+    v = mean_short([(0.1, -20.0), (0.2, -30.0), (5.0, 0.0)], 0.0, 1.0)
+    assert abs(v - 10 * math.log10((10 ** -2 + 10 ** -3) / 2)) < 1e-9
+    assert mean_short([(0.1, -20.0)], 3.0, 4.0) is None

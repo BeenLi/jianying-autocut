@@ -13,11 +13,10 @@ scene_notes.json 由 Claude 看联系表时写，可以分批写，时间是素�
 还有素材没写或有错误时列出来，退出码 1，把缺的补上再跑。
 """
 import argparse
-import json
 import os
 import sys
 
-from common import read_csv
+from common import load_json, read_csv
 
 
 def check_notes(notes, durations):
@@ -51,10 +50,7 @@ def render_brief(inventory, notes, speech):
 
 
 def _load(path):
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return load_json(path, default={}, kind=dict)
 
 
 def main():

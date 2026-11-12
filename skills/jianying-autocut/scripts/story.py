@@ -15,7 +15,7 @@ import re
 import sys
 from datetime import datetime
 
-from common import read_csv
+from common import load_json, read_csv
 from plan import RHYTHMS
 
 EDGE_S = 0.5
@@ -136,8 +136,7 @@ def main():
     if args.default:
         plan = {"director_intent": "", "chapters": default_chapters(inv, args.chapters)}
     else:
-        with open(out_path, encoding="utf-8") as f:
-            plan = json.load(f)
+        plan = load_json(out_path, kind=dict)
 
     if args.exclude:
         plan = apply_exclude(plan, args.exclude)

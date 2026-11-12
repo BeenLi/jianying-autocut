@@ -183,3 +183,19 @@ def test_narration_subs_only_on_live_shots(tmp_path, monkeypatch):            # 
          "--narration", str(work / "narration_track.json"), "--subs", str(work / "subtitles.json"))
     texts = json.dumps(json.load(open(drafts / "字幕" / "draft_info.json"))["materials"].get("texts", []), ensure_ascii=False)
     assert "哇哦" in texts and "垫底里的话" not in texts
+
+
+def test_build_rejects_bgm_plan_with_bgm(tmp_path, monkeypatch):   # B7
+    drafts, work, _ = _setup(tmp_path)
+    (work / "bgm_plan.json").write_text("[]")
+    with pytest.raises(SystemExit, match="--bgm-plan"):
+        _run(monkeypatch, "--work", str(work), "--name", "x", "--drafts-dir", str(drafts),
+             "--bgm-plan", str(work / "bgm_plan.json"), "--bgm", str(tmp_path / "a.mp4"))
+
+
+def test_broken_orientation_json_keeps_old_draft(tmp_path, monkeypatch):   # A4
+    drafts, work, old = _setup(tmp_path)
+    (work / "orientation.json").write_text("{bad")
+    with pytest.raises(SystemExit, match="orientation.json"):
+        _run(monkeypatch, "--work", str(work), "--name", "旧草稿", "--drafts-dir", str(drafts), "--replace")
+    assert (old / "keep.txt").exists()

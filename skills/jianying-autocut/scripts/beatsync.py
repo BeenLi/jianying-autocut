@@ -26,7 +26,7 @@ import os
 import shutil
 import sys
 
-from common import US, read_csv
+from common import US, load_json, read_csv
 
 MIN_SHOT = int(1.5 * US)
 TAIL = int(0.5 * US)      # 素材首尾不取
@@ -277,8 +277,7 @@ def main():
     speech = {}
     sp = os.path.join(W, "speech.json")
     if os.path.exists(sp):     # 第 3 步的转写：切点尽量不切在话中间
-        with open(sp, encoding="utf-8") as f:
-            said = json.load(f)
+        said = load_json(sp, kind=dict)
         speech = {r["path"]: [(round(x["start"] * US), round(x["end"] * US)) for x in said.get(r["clip_id"], [])]
                   for r in inv}
 

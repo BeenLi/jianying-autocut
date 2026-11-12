@@ -50,7 +50,17 @@ def measure(path, start=None, end=None):
         cmd += ["-to", f"{end:.3f}"]
     cmd += ["-i", path, "-vn", "-af", "ebur128=peak=true:framelog=info", "-f", "null", "-"]
     r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:      # 文件坏了 / 不存在：别把 -70 LUFS 当真值往下算
+        raise subprocess.CalledProcessError(r.returncode, cmd, r.stdout, r.stderr[-500:])
     return parse_ebur128(r.stderr)
+
+
+def mean_short(short, a_s, b_s):
+    """[a_s, b_s] 秒内短时响度的能量平均（近似这段的积分响度）；没有采样点返回 None。"""
+    vals = [s for t, s in short if a_s <= t <= b_s]
+    if not vals:
+        return None
+    return 10 * math.log10(sum(10 ** (v / 10) for v in vals) / len(vals))
 
 
 def max_short(short, a_s, b_s):
@@ -64,8 +74,11 @@ class Cache:
         self.path = os.path.join(work, "loudness.json")
         self.data = {}
         if os.path.exists(self.path):
-            with open(self.path, encoding="utf-8") as f:
-                self.data = json.load(f)
+            try:
+                with open(self.path, encoding="utf-8") as f:
+                    self.data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                self.data = {}          # 只是缓存：坏了就重测
 
     @staticmethod
     def _key(path, key_extra):
@@ -76,6 +89,10 @@ class Cache:
         return self.data.get(self._key(path, key_extra))
 
     def put(self, path, value, key_extra=""):
+        # 同一文件旧版本（mtime / 大小变了）的结果都作废，免得缓存只增不减
+        stamp = self._key(path, "").rsplit("|", 1)[0]
+        for k in [k for k in self.data if k.rsplit("|", 3)[0] == path and k.rsplit("|", 1)[0] != stamp]:
+            del self.data[k]
         self.data[self._key(path, key_extra)] = value
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False)
@@ -83,6 +100,8 @@ class Cache:
     def measure(self, path, start=None, end=None):
         extra = "" if start is None and end is None else f"{start}-{end}"
         hit = self.get(path, extra)
+        if hit is None or not hit.get("short"):     # 旧版本把测量失败也缓存成了空结果
+            hit = None
         if hit is None:
             hit = measure(path, start, end)
             self.put(path, hit, extra)
