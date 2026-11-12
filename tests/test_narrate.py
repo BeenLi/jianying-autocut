@@ -264,9 +264,11 @@ def test_line_visual_respects_at_and_marks_used():
 
 
 def test_live_reserved_before_lines():
-    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c1", 18.0, 23.0),
-             _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c2"))]
+    # L1 和用同一素材的原声段之间隔着一句，才允许 L1 用 c1（紧挨着会被换掉，见 B2）
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L0", 6.0, 8.0, visuals=_vis("c2")),
+             _live("V1", "c1", 18.0, 23.0), _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c2"))]
     rows, _, _ = _lay(items, _clips(("c1", 40), ("c2", 40)))
+    assert rows[0]["source"] == "/x/c1.mp4"
     a, d = rows[0]["in_us"], rows[0]["dur_us"]
     assert a + d <= us(18.0) or a >= us(23.0)
 
@@ -441,3 +443,92 @@ def test_align_split_sentence_retaken_drops_whole_first_take():
              _line("L3", 8, 14, text="凌晨四点我们从山脚出发，天还没有亮，只有头灯照着脚下的石阶。")]
     out, _ = align_to_script(lines, script)
     assert [bool(l.get("skip")) for l in out] == [True, True, False]
+
+
+# ---------- 小问题修复（第二轮） ----------
+
+def test_restart_also_skips_abandoned_half_sentence():          # B1
+    out = mark_retakes([_line("L1", 0, 2, text="凌晨四点我们从"), _line("L2", 2.2, 2.6, text="不对"),
+                        _line("L3", 3, 6, text="凌晨四点我们从山脚出发")])
+    assert [bool(l.get("skip")) for l in out] == [True, True, False]
+    assert "一半" in out[0]["skip_reason"]
+
+
+def test_restart_keeps_complete_previous_sentence():
+    for prev in ("山很高。", "凌晨四点出发了"):
+        out = mark_retakes([_line("L1", 0, 2, text=prev), _line("L2", 2.2, 2.6, text="不对"),
+                            _line("L3", 3, 6, text="山顶的风特别大，是雾很大")])
+        assert not out[0].get("skip"), prev
+
+
+def test_restart_prefix_merged_into_retake_is_trimmed_not_dropped():   # C1
+    words = [{"start": 0.0, "end": 0.5, "word": "重来"}, {"start": 0.8, "end": 1.2, "word": "凌晨"},
+             {"start": 1.2, "end": 1.6, "word": "四点"}, {"start": 1.6, "end": 3.0, "word": "我们从山脚出发"}]
+    out = mark_retakes([_line("L1", 0.0, 3.0, text="重来，凌晨四点我们从山脚出发", words=words)])
+    assert not out[0].get("skip") and out[0]["start"] == 0.8 and out[0]["text"] == "凌晨四点我们从山脚出发"
+    out = mark_retakes([_line("L1", 0.0, 3.0, text="重来，凌晨四点我们从山脚出发")])   # 没有逐字时间
+    assert not out[0].get("skip") and "重来" in out[0].get("note", "")
+
+
+def test_draft_plan_drops_word_timings():
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 9.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 2.0, "text": "第一句", "words": [{"start": 0.5, "end": 2.0, "word": "第一句"}]}]}}
+    assert "words" not in draft_plan(speech)["items"][0]
+
+
+def test_validate_survives_bad_structure_and_requires_text():  # B3 / C2
+    plan = _plan(dict(_line("L1", 0, 1), text=""), _line("L2", "abc", 1), {"type": "line"},
+                 dict(_line("L3", 0, 1, skip=True), text=""))
+    plan["chapters"].append({"title": "无 id"})
+    errs, _ = validate(plan, {}, {"n1": 60.0})
+    assert any("L1" in e and "text" in e for e in errs)
+    assert any("L2" in e and "start" in e for e in errs)
+    assert any("缺 id" in e for e in errs)
+    assert not any("L3" in e for e in errs)                  # 跳过的句子不要求 text
+    errs, _ = validate({"files": {}, "chapters": [], "items": "x"}, {}, {})
+    assert errs and "items" in errs[0]
+
+
+def test_line_before_live_avoids_live_clip():                  # B2
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c1", 30.0, 34.0),
+             _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c2"))]
+    rows, track, _ = _lay(items, _clips(("c1", 60), ("c2", 60)))
+    srcs = [r["source"] for r in rows]
+    assert all(a != b for a, b in zip(srcs, srcs[1:])), srcs
+    _rows_ok(rows, track["total_us"])
+
+
+def test_live_too_short_for_head_suggests_value():             # B4
+    with pytest.raises(ValueError, match="--head"):
+        _lay([_live("V1", "c1", 0.5, 5.0), _line("L1", 1.0, 3.0, visuals=_vis("c2"))], _clips(("c1", 40), ("c2", 40)))
+    with pytest.raises(ValueError, match="--tail"):
+        _lay([_line("L1", 1.0, 3.0, visuals=_vis("c2")), _live("V1", "c1", 30.0, 39.5)], _clips(("c1", 40), ("c2", 40)))
+
+
+def test_bgm_up_on_live_with_speech_ignored():                 # B5
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c2", 30.0, 35.0, bgm="up"),
+             _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c3"))]
+    speech = {"c2": [{"start": 31.0, "end": 33.0, "text": "哇"}]}
+    _, track, rep = _lay(items, _clips(("c1", 60), ("c2", 60), ("c3", 60)), speech)
+    assert track["bgm"] == [] and any("V1" in w for w in rep["warns"])
+    _, track, _ = _lay(items, _clips(("c1", 60), ("c2", 60), ("c3", 60)), {})
+    assert track["bgm"] == [{"start_us": us(3.6), "dur_us": us(5.0), "mode": "up"}]
+
+
+def test_dry_run_marks_continued_sentence(capsys):              # B9
+    from narrate import _print_report
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0)]
+    plan = _plan(*items)
+    rows, track, rep = layout(plan, _clips(("c1", 60)), {}, {}, {"n1": 60.0, "n2": 60.0}, Opts())
+    _print_report(plan, rows, track, rep, {})
+    out = capsys.readouterr().out.splitlines()
+    k = next(i for i, l in enumerate(out) if " L2 " in l)
+    assert "延续上一镜头" in out[k + 1]
+
+
+def test_main_reports_broken_plan_json(tmp_path):              # A4
+    w = _work(tmp_path)
+    (tmp_path / "narration_plan.json").write_text("{\n oops\n}")
+    with pytest.raises(SystemExit) as e:
+        main(["--work", w])
+    assert "narration_plan.json" in str(e.value) and "第 2 行" in str(e.value)

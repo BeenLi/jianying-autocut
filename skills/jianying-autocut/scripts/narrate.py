@@ -23,13 +23,15 @@ import re
 import sys
 from dataclasses import dataclass, fields
 
-from common import US
+from common import US, load_json
 from plan import EDGE, FIELDS, MIN_SHOT, fmt, load_clips, pick_one, place_pin, write_shots
 
 RESTART_WORDS = ("重来", "不对", "再来一遍")
 RETAKE_RATIO = 0.8       # 两句相似到这个程度，就当作同一句录了两遍
 RETAKE_WINDOW = 3        # 只和后面这么多句比（重录总是紧挨着）
 RESTART_MAX_CHARS = 8    # 「重来」类关键词出现在不超过这么多字的短句里才算口头标记
+HALF_MIN_CHARS = 4       # 「重来」前一句至少这么多字，才可能是说了一半的句子（太短的什么都像）
+HALF_RATIO = 0.8         # 前一句和重说那句的开头相似到这个程度，就当作说了一半
 SCRIPT_RATIO = 0.6       # 转写句和稿子句相似到这个程度才算对上
 SPLIT_GAIN = 0.05        # 和前一段拼起来比单独更像稿子这么多，就当作同一句被 Whisper 拆成了两段
 OVERLAP_TOL = 0.3        # 相邻两句在源文件里重叠不超过这么多秒（Whisper 边界误差）仍算连续
@@ -70,10 +72,19 @@ def validate(plan, clip_durs, file_durs):
     """返回 (errs, warns)。clip_durs：{clip_id: 秒}；file_durs：{fid: 秒}（只含磁盘上存在的文件）。"""
     errs, warns = [], []
     files = plan.get("files", {})
-    chapters = {c["id"] for c in plan.get("chapters", [])}
+    items, chs = plan.get("items", []), plan.get("chapters", [])
+    if not isinstance(items, list) or not isinstance(chs, list) or not isinstance(files, dict):
+        return ["narration_plan.json 的 items / chapters 应该是列表，files 应该是对象"], warns
+    for k, c in enumerate(chs, 1):
+        if not isinstance(c, dict) or not c.get("id"):
+            errs.append(f"chapters 第 {k} 项缺 id")
+    chapters = {c["id"] for c in chs if isinstance(c, dict) and c.get("id")}
     seen = set()
-    for it in plan.get("items", []):
-        iid = it.get("id", "?")
+    for k, it in enumerate(items, 1):
+        if not isinstance(it, dict) or not it.get("id"):
+            errs.append(f"items 第 {k} 项缺 id")
+            continue
+        iid = it["id"]
         if iid in seen:
             errs.append(f"{iid}：id 重复")
         seen.add(iid)
@@ -81,7 +92,13 @@ def validate(plan, clip_durs, file_durs):
             errs.append(f"{iid}：章节 {it.get('chapter')} 没有在 chapters 里定义")
         if it.get("bgm") is not None and it["bgm"] not in BGM_MODES:
             errs.append(f"{iid}：bgm 只能是 up 或 drop，不是 {it['bgm']}")
-        start, end = float(it.get("start", 0)), float(it.get("end", 0))
+        try:
+            start, end = float(it.get("start", 0)), float(it.get("end", 0))
+        except (TypeError, ValueError):
+            errs.append(f"{iid}：start / end 要是秒数，现在是 {it.get('start')!r} / {it.get('end')!r}")
+            continue
+        if it.get("type") == "line" and not it.get("skip") and not (isinstance(it.get("text"), str) and it["text"].strip()):
+            errs.append(f"{iid}：旁白句缺 text（字幕要用）")
         if it.get("type") == "line":
             fid = it.get("file")
             if fid not in files:
@@ -93,9 +110,11 @@ def validate(plan, clip_durs, file_durs):
             elif end > file_durs[fid] + 0.05:
                 errs.append(f"{iid}：end {end}s 超出旁白文件长度 {file_durs[fid]}s")
             for v in it.get("visuals", []):
-                cid = v.get("clip_id")
+                cid = v.get("clip_id") if isinstance(v, dict) else None
                 if cid not in clip_durs:
                     errs.append(f"{iid}：素材 {cid} 不在 inventory 里")
+                elif v.get("at") is not None and not isinstance(v["at"], (int, float)):
+                    errs.append(f"{iid}：素材 {cid} 的 at 要是秒数，现在是 {v['at']!r}")
                 elif v.get("at") is not None and not 0 <= float(v["at"]) <= clip_durs[cid]:
                     errs.append(f"{iid}：素材 {cid} 的 at={v['at']}s 超出素材长度 {clip_durs[cid]}s")
             if it.get("bgm") == "up":
@@ -116,11 +135,44 @@ def validate(plan, clip_durs, file_durs):
 def mark_retakes(lines):
     """没有旁白稿时找重录：返回新列表，被认定为废弃的句子加 skip / skip_reason，不改入参。"""
     out = [dict(l) for l in lines]
+
+    def neighbour(k, step):
+        j = k + step
+        while 0 <= j < len(out):
+            if out[j].get("file") == out[k].get("file") and not out[j].get("skip"):
+                return j
+            j += step
+        return None
+
+    def drop_half(k, retold):
+        """「重来」前面那句如果是重说那句的开头（说了一半），也跳过。"""
+        j = neighbour(k, -1)
+        if j is None:
+            return
+        a = _norm(out[j]["text"])
+        if len(a) >= HALF_MIN_CHARS and len(retold) > len(a) and _ratio(a, retold[:len(a)]) >= HALF_RATIO:
+            out[j].update(skip=True, skip_reason="说了一半，后面重说了")
+
     for k, l in enumerate(out):
         t = _norm(l["text"])
-        # 「重来」类口头标记：只认短句或出现在句首 / 句尾，免得「不对劲」这种正常句子被误删
-        if any(w in t and (len(t) <= RESTART_MAX_CHARS or t.startswith(w) or t.endswith(w)) for w in RESTART_WORDS):
+        w = next((w for w in RESTART_WORDS if w in t), None)
+        if w and t.startswith(w) and len(t) > RESTART_MAX_CHARS:
+            # Whisper 把「重来，〈重说的整句〉」合成了一句：去掉开头的口头标记，保留后面的话
+            rest = re.sub(rf"^[\s，。！？、,.!?]*{w}[\s，。！？、,.!?]*", "", l["text"])
+            drop_half(k, _norm(rest))
+            nxt = next((x for x in l.get("words") or [] if _norm(x["word"]) and _norm(x["word"]) not in w
+                        and x["start"] >= l["start"]), None)
+            if nxt is not None:
+                l.update(start=nxt["start"], text=rest)
+            else:
+                l["note"] = f"开头有口头「{w}」，没有逐字时间去掉它：在页面上把 start 往后改一点"
+            continue
+        # 「重来」类口头标记：只认短句或出现在句尾，免得「不对劲」这种正常句子被误删
+        if w and (len(t) <= RESTART_MAX_CHARS or t.endswith(w)):
             l.update(skip=True, skip_reason="口头重来")
+            j = neighbour(k, 1)
+            if j is not None:
+                drop_half(k, _norm(out[j]["text"]))
             continue
         later = [m for m in out[k + 1:k + 1 + RETAKE_WINDOW] if m.get("file") == l.get("file")]
         if any(_ratio(l["text"], m["text"]) >= RETAKE_RATIO for m in later):
@@ -163,12 +215,14 @@ def draft_plan(speech, script=None):
     for fid in sorted(speech["files"], key=lambda f: int(f[1:])):
         for l in speech["lines"].get(fid, []):
             lines.append({"type": "line", "chapter": "ch1", "file": fid, "start": l["start"], "end": l["end"],
-                          "text": l["text"], "visuals": []})
+                          "text": l["text"], "visuals": [], "words": l.get("words", [])})
     missing = []
     if script:
         lines, missing = align_to_script(lines, script)
     else:
         lines = mark_retakes(lines)
+    for l in lines:
+        l.pop("words", None)            # 逐字时间只给找重录用，不进 plan
     plan = {"files": dict(speech["files"]), "chapters": [{"id": "ch1", "title": "旁白"}],
             "items": [{"id": f"L{k:02d}", **l} for k, l in enumerate(lines, 1)]}
     if missing:
@@ -395,8 +449,12 @@ def layout(plan, clips, speech, silences, file_durs, opts):
         c = clips[it["clip_id"]]
         a = round(it["start"] * US) - (m["start_us"] - s["start_us"])
         d = s["end_us"] - s["start_us"]
-        if a < 0 or a + d > c.dur:
-            raise ValueError(f"{it['id']}：原声段所在素材 {c.clip_id} 不够长，放不下片头 / 片尾")
+        if a < 0:
+            raise ValueError(f"{it['id']}：原声段在片头，素材 {c.clip_id} 在 {it['start']}s 之前不够放片头："
+                             f"把 --head 调到 {max(0.0, it['start'] - (m['start_us'] - s['start_us'] - opts.head * US) / US):.1f} 以下（或 --head 0）")
+        if a + d > c.dur:
+            raise ValueError(f"{it['id']}：原声段在片尾，素材 {c.clip_id} 在 {it['end']}s 之后不够放片尾："
+                             f"把 --tail 调到 {max(0.0, (c.dur - round(it['end'] * US)) / US):.1f} 以下")
         c.used.append((a, a + d))
         if c.window_score(a, d) is None:
             report["warns"].append(f"{it['id']}：原声段 {c.clip_id} 里有坏帧（按你给的范围保留）")
@@ -412,11 +470,13 @@ def layout(plan, clips, speech, silences, file_durs, opts):
         it = items[s["item"]]
         L = s["end_us"] - s["start_us"]
         vis = it.get("visuals", [])
+        # 紧跟着的原声段用的素材：这一槽的最后一个镜头不能是它，否则同一素材前后相邻
+        next_live = items[sl[k + 1]["item"]]["clip_id"] if k + 1 < len(sl) and sl[k + 1]["live"] else None
         if prev_shot is not None and (L < MIN_SHOT or not vis):
             if not vis:
                 report["unpaired"].append(it["id"])
             # 原声段的画面就是用户给的那段声音，不能延长（会把范围外的原声以人声音量带进旁白）
-            if prev_shot["kind"] != "live" and _extend(prev_shot, L):
+            if prev_shot["kind"] != "live" and prev_shot["clip"].clip_id != next_live and _extend(prev_shot, L):
                 continue
         j = line_slots.index(k)
         neighbours = [v for jj in (j - 1, j + 1) if 0 <= jj < len(line_slots)
@@ -428,13 +488,15 @@ def layout(plan, clips, speech, silences, file_durs, opts):
             remaining = d
             while remaining > 0:
                 last = (got[-1] if got else prev_shot)
-                avoid = last["clip"].clip_id if last else None
+                avoid = {last["clip"].clip_id} if last else set()
+                if i == len(pieces) - 1 and next_live:
+                    avoid.add(next_live)
                 cands = ([vis[i]] if i < len(vis) else []) + [v for v in vis if v is not (vis[i] if i < len(vis) else None)] \
                     + neighbours
                 placed = None
                 for v in cands:
                     c = clips.get(v["clip_id"])
-                    if c is None or c.clip_id == avoid:
+                    if c is None or c.clip_id in avoid:
                         continue
                     w = _try_place(c, v.get("at"), remaining, speech)
                     if w:
@@ -443,7 +505,7 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                             report["fallback"].append((it["id"], c.clip_id))
                         break
                 if placed is None:
-                    others = [clips[c] for c in pool.get(it["chapter"], []) if c != avoid]
+                    others = [clips[c] for c in pool.get(it["chapter"], []) if c not in avoid]
                     with _Penalties(others, speech):
                         shot = pick_one(others, remaining, "narr")
                     if shot is None:
@@ -492,6 +554,9 @@ def layout(plan, clips, speech, silences, file_durs, opts):
             track["speech"].append([m["mouth_us"], dur])
             track["subs"] += [{"start_us": a, "dur_us": d, "text": x} for a, d, x in split_sub(it["text"], m["mouth_us"], dur)]
         mode = it.get("bgm")
+        if mode == "up" and s["live"] and any(a + d > s["start_us"] and a < s["end_us"] for a, d in track["speech"]):
+            report["warns"].append(f"{it['id']}：原声段里有人说话，标 bgm: up 会把人声盖住，已忽略")
+            mode = None
         if mode == "drop" or (mode == "up" and s["live"]):
             track["bgm"].append({"start_us": s["start_us"], "dur_us": s["end_us"] - s["start_us"], "mode": mode})
     return rows, track, report
@@ -513,10 +578,7 @@ class _Penalties:
 # ---------- CLI ----------
 
 def _load(path, default=None):
-    if not os.path.exists(path):
-        return default
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return load_json(path, default=default)
 
 
 def note_at(notes, cid, t_s):
@@ -533,6 +595,8 @@ def _print_report(plan, rows, track, report, notes):
     for e in report["items"]:
         tag = "原声" if e["live"] else "旁白"
         print(f"  {fmt(e['start_us'])}–{fmt(e['end_us'])} {e['item']} {tag}「{e['text'][:24]}」")
+        if not e["live"] and not e["shots"]:
+            print("      （延续上一镜头）")
         for cid, a, d in e["shots"]:
             print(f"      {cid}@{a / US:.1f}s +{d / US:.1f}s  {note_at(notes, cid, (a + d / 2) / US)[:30]}")
     for iid, why in report["skipped"]:
