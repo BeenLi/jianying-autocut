@@ -24,6 +24,27 @@ def default_work(folder):
     return os.path.join(os.path.abspath(os.path.expanduser(folder)), "_autocut")
 
 
+_MISSING = object()
+
+
+def load_json(path, default=_MISSING, kind=None):
+    """读 JSON 文件。文件不存在时返回 default（没给 default 就退出并说明）；JSON 写坏了、或顶层类型
+    不是 kind（dict / list）时，退出并给出文件名和第几行第几列，免得一长串 traceback。"""
+    if not os.path.exists(path):
+        if default is not _MISSING:
+            return default
+        raise SystemExit(f"{path} 不存在")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"{path} 不是合法的 JSON：第 {e.lineno} 行第 {e.colno} 列，{e.msg}。改好再跑。")
+    if kind is not None and not isinstance(data, kind):
+        want = {dict: "对象 {…}", list: "列表 […]"}.get(kind, kind.__name__)
+        raise SystemExit(f"{path} 的最外层应该是{want}")
+    return data
+
+
 def write_csv(path, rows, fields):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8-sig") as f:

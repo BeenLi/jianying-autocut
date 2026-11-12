@@ -177,3 +177,57 @@ def test_talk_longer_than_chapter_rhythm_is_reported():     # Final review I3
     sp["chapters"][1]["rhythm"] = "slow"                     # slow 最长 18s，放得下
     _, rep = build_story_plan(sp, m)
     assert rep["long_talk"] == []
+
+
+# ---------- 小问题修复 ----------
+
+import pytest
+
+
+def test_to_seconds_hms_and_rejects_empty_parts():          # A3
+    assert to_seconds("1:05:00") == 3900 and to_seconds("1:05") == 65 and to_seconds(" 7 ") == 7
+    assert to_seconds("1:") is None and to_seconds(":5") is None and to_seconds("") is None
+    assert to_seconds("1:2:3:4") is None
+
+
+def test_cross_chapter_pins_colliding_are_reported():       # A1
+    sp, m, d = _inputs()
+    m["extras"] = {"c001": {"chapter": "ch2", "at": 12, "reason": "", "accepted": True}}
+    _, rep = build_story_plan(sp, m)
+    assert rep["cross_pins"] == [("c001", 10.0, "ch1", 12.0, "ch2")]
+    m["extras"]["c001"]["at"] = 20                          # ch1 fast 最长 6s → 6/2+1 = 4s 之外不撞
+    _, rep = build_story_plan(sp, m)
+    assert rep["cross_pins"] == []
+
+
+def test_undecided_or_rejected_extras_not_validated():      # A2
+    sp, m, d = _inputs()
+    m["extras"] = {"c003": {"chapter": "chX", "at": 999, "accepted": False},
+                   "c004": {"chapter": "chX", "at": "abc", "accepted": None}}
+    assert validate(sp, m, d) == []
+
+
+def test_odd_accepted_value_is_reported():
+    sp, m, d = _inputs()
+    m["extras"] = {"c003": {"chapter": "ch2", "at": 5, "accepted": "true"}}
+    _, rep = build_story_plan(sp, m)
+    assert rep["odd_extras"] == ["c003"] and rep["pending_extras"] == []
+
+
+def test_validate_survives_bad_structure():                 # C2
+    sp, m, d = _inputs()
+    sp["shots"].append({"chapter": "ch1"})
+    sp["chapters"].append({"title": "无 id"})
+    errs = validate(sp, m, d)
+    assert any("id" in e for e in errs)
+    sp, m, d = _inputs()
+    m["matches"] = [1, 2]
+    assert any("matches" in e for e in validate(sp, m, d))
+
+
+def test_main_reports_broken_json(tmp_path):                # A4
+    _write_work(tmp_path, *_inputs())
+    (tmp_path / "matches.json").write_text('{"matches": {,}}')
+    with pytest.raises(SystemExit) as e:
+        main(["--work", str(tmp_path)])
+    assert "matches.json" in str(e.value) and "第 1 行" in str(e.value)
