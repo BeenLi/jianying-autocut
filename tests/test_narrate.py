@@ -570,3 +570,17 @@ def test_partial_fill_uses_off_grid_free_segment():
     clips["c1"].used.append((us(0.5), us(3.85)))
     shot = _place_any([{"clip_id": "c1", "at": 2.0}], clips, set(), us(8.0), {}, True)
     assert shot is not None and shot["in_us"] == us(4.85) and shot["dur_us"] == us(10.3) - us(4.85)
+
+
+def test_last_piece_leaves_no_sliver_and_borrowed_visual_ignores_its_at():
+    # A 的槽比 c1 的可用长度只多一点：不能用满 c1 后剩一个不到 2s、放不下也并不进去的零头，
+    # 要给借来的画面留够 2s；借来的 c3 带着 Z 的 at=2.0（Z 自己已经用掉那一段），借用时不受它约束
+    clips = _clips(("c1", 9), ("c2", 30), ("c3", 30))
+    items = [_line("Z", 1.0, 3.0, visuals=[{"clip_id": "c3", "at": 2.0}]),
+             _line("A", 4.0, 12.5, visuals=_vis("c1")),
+             _line("B", 13.5, 15.5, visuals=_vis("c2"))]
+    rows, track, report = _lay(items, clips)
+    _rows_ok(rows, track["total_us"])
+    assert all(r["dur_us"] >= us(2.0) for r in rows)
+    a_shots = next(i for i in report["items"] if i["item"] == "A")["shots"]
+    assert [s[0] for s in a_shots] == ["c1", "c3"]

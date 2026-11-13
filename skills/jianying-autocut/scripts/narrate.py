@@ -395,9 +395,10 @@ def _place_in_free_segment(c, d):
     return a, round(score, 3)
 
 
-def _place_any(cands, clips, avoid, remaining, speech, partial):
+def _place_any(cands, clips, avoid, remaining, speech, partial, last=False):
     """按顺序在候选画面里放一个镜头。partial=False 要整块盖住 remaining；partial=True 取素材里最长的空闲段
-    （至少 MIN_SHOT）。返回镜头 dict，放不下返回 None。"""
+    （至少 MIN_SHOT）。last=True（本槽最后一块）时不留不足 MIN_SHOT 的零头：零头没有下一块可挪。
+    返回镜头 dict，放不下返回 None。"""
     for v in cands:
         c = clips.get(v["clip_id"])
         if c is None or c.clip_id in avoid:
@@ -405,6 +406,8 @@ def _place_any(cands, clips, avoid, remaining, speech, partial):
         d = remaining
         if partial:
             d = min(c.longest_free(), remaining)
+            if last and 0 < remaining - d < MIN_SHOT:
+                d = remaining - MIN_SHOT
             if d < MIN_SHOT:
                 continue
         w = _try_place(c, v.get("at"), d, speech)
@@ -517,7 +520,8 @@ def layout(plan, clips, speech, silences, file_durs, opts):
             if prev_shot["kind"] != "live" and prev_shot["clip"].clip_id != next_live and _extend(prev_shot, L):
                 continue
         j = line_slots.index(k)
-        neighbours = [v for jj in (j - 1, j + 1) if 0 <= jj < len(line_slots)
+        # 借来的画面不带原句的 at：那一刻是原句自己要用的，借用只取素材里还空着的地方
+        neighbours = [{"clip_id": v["clip_id"]} for jj in (j - 1, j + 1) if 0 <= jj < len(line_slots)
                       for v in items[sl[line_slots[jj]]["item"]].get("visuals", [])]
         n = max(1, min(len(vis), L // MIN_SHOT)) if vis else 1
         pieces = [L // n] * (n - 1) + [L - L // n * (n - 1)]
@@ -533,10 +537,11 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                 others = [clips[c] for c in pool.get(it["chapter"], []) if c not in avoid]
                 # 先找能整块盖住的；素材都比这块短时，放得下多少放多少，剩下的交给下一个候选。
                 # 本块指定的画面最优先，其次本句别的画面，最后才是借来的（相邻句的画面、本章出现过的素材）
+                tail = i == len(pieces) - 1
                 placed = (_place_any(own[:1], clips, avoid, remaining, speech, False)
-                          or _place_any(own[:1], clips, avoid, remaining, speech, True)
+                          or _place_any(own[:1], clips, avoid, remaining, speech, True, tail)
                           or _place_any(own[1:], clips, avoid, remaining, speech, False)
-                          or _place_any(own[1:], clips, avoid, remaining, speech, True)
+                          or _place_any(own[1:], clips, avoid, remaining, speech, True, tail)
                           or _place_any(neighbours, clips, avoid, remaining, speech, False))
                 if placed is None:
                     with _Penalties(others, speech):
@@ -544,7 +549,7 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                     if placed is not None:
                         placed["kind"] = "narr"
                 placed = placed or _place_any(neighbours + [{"clip_id": c.clip_id} for c in others],
-                                              clips, avoid, remaining, speech, True)
+                                              clips, avoid, remaining, speech, True, tail)
                 if placed is None:
                     raise ValueError(f"章节 {it['chapter']}（{it['id']}）没有可用的素材来铺这句旁白："
                                      f"本句和相邻句的画面都被占用或不够 {MIN_SHOT / US:g}s，给这句多配一两个画面")
