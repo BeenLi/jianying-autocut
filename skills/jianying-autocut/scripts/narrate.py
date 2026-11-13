@@ -377,6 +377,26 @@ def _try_place(c, at, d, speech):
     return a, round(score or 0, 3)
 
 
+def _place_any(cands, clips, avoid, remaining, speech, partial):
+    """按顺序在候选画面里放一个镜头。partial=False 要整块盖住 remaining；partial=True 取素材里最长的空闲段
+    （至少 MIN_SHOT）。返回镜头 dict，放不下返回 None。"""
+    for v in cands:
+        c = clips.get(v["clip_id"])
+        if c is None or c.clip_id in avoid:
+            continue
+        d = remaining
+        if partial:
+            d = min(c.longest_free(), remaining)
+            if d < MIN_SHOT:
+                continue
+        w = _try_place(c, v.get("at"), d, speech)
+        if not w and partial and v.get("at") is not None:
+            w = _try_place(c, None, d, speech)        # 以 at 为中心放不下这么长，就取素材里能放的地方
+        if w:
+            return {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1]}
+    return None
+
+
 def _extend(shot, extra):
     """把上一个镜头往后延长 extra；素材不够长、碰到坏帧或别的占用就返回 False。"""
     c, a, d = shot["clip"], shot["in_us"], shot["dur_us"]
@@ -491,33 +511,35 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                 avoid = {last["clip"].clip_id} if last else set()
                 if i == len(pieces) - 1 and next_live:
                     avoid.add(next_live)
-                cands = ([vis[i]] if i < len(vis) else []) + [v for v in vis if v is not (vis[i] if i < len(vis) else None)] \
-                    + neighbours
-                placed = None
-                for v in cands:
-                    c = clips.get(v["clip_id"])
-                    if c is None or c.clip_id in avoid:
-                        continue
-                    w = _try_place(c, v.get("at"), remaining, speech)
-                    if w:
-                        placed = {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": remaining, "score": w[1]}
-                        if v not in vis:
-                            report["fallback"].append((it["id"], c.clip_id))
-                        break
+                own = ([vis[i]] if i < len(vis) else []) + [v for v in vis if v is not (vis[i] if i < len(vis) else None)]
+                others = [clips[c] for c in pool.get(it["chapter"], []) if c not in avoid]
+                # 先找能整块盖住的；素材都比这块短时，放得下多少放多少，剩下的交给下一个候选。
+                # 本块指定的画面最优先，其次本句别的画面，最后才是借来的（相邻句的画面、本章出现过的素材）
+                placed = (_place_any(own[:1], clips, avoid, remaining, speech, False)
+                          or _place_any(own[:1], clips, avoid, remaining, speech, True)
+                          or _place_any(own[1:], clips, avoid, remaining, speech, False)
+                          or _place_any(own[1:], clips, avoid, remaining, speech, True)
+                          or _place_any(neighbours, clips, avoid, remaining, speech, False))
                 if placed is None:
-                    others = [clips[c] for c in pool.get(it["chapter"], []) if c not in avoid]
                     with _Penalties(others, speech):
-                        shot = pick_one(others, remaining, "narr")
-                    if shot is None:
-                        raise ValueError(f"章节 {it['chapter']}（{it['id']}）没有可用的素材来铺这句旁白")
-                    shot["kind"] = "narr"
-                    placed = shot
-                    report["fallback"].append((it["id"], shot["clip"].clip_id))
+                        placed = pick_one(others, remaining, "narr")
+                    if placed is not None:
+                        placed["kind"] = "narr"
+                placed = placed or _place_any(neighbours + [{"clip_id": c.clip_id} for c in others],
+                                              clips, avoid, remaining, speech, True)
+                if placed is None:
+                    raise ValueError(f"章节 {it['chapter']}（{it['id']}）没有可用的素材来铺这句旁白："
+                                     f"本句和相邻句的画面都被占用或不够 {MIN_SHOT / US:g}s，给这句多配一两个画面")
+                if placed["clip"].clip_id not in {v["clip_id"] for v in own}:
+                    report["fallback"].append((it["id"], placed["clip"].clip_id))
                 got.append(placed)
                 remaining -= placed["dur_us"]
                 if 0 < remaining < MIN_SHOT:
                     # 零头不单独成镜头：并进本槽里能延长的镜头（延长前面的镜头只是把后面的往后推）
                     if any(_extend(g, remaining) for g in reversed(got)):
+                        remaining = 0
+                    elif i + 1 < len(pieces):          # 并不进去就挪给下一块，别单独成一个闪一下的镜头
+                        pieces[i + 1] += remaining
                         remaining = 0
         shots[k] = got
         prev_shot = got[-1]

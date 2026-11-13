@@ -532,3 +532,31 @@ def test_main_reports_broken_plan_json(tmp_path):              # A4
     with pytest.raises(SystemExit) as e:
         main(["--work", w])
     assert "narration_plan.json" in str(e.value) and "第 2 行" in str(e.value)
+
+
+# ---------- 端到端发现：画面素材比这句旁白短 ----------
+
+def test_line_longer_than_each_visual_is_covered_by_several():
+    # 8s 的句子加片头片尾约 10.6s，均分成两块各 5.3s；c1 只有 5s 可用、c2 有 7s（整槽约 11.1s）：
+    # 应该先用满 c1、零头并给下一块的 c2，而不是把 c2 挪到第一块、第二块没得放而报"没有可用的素材"
+    clips = _clips(("c1", 6), ("c2", 8))
+    rows, track, report = _lay([_line("L1", 1.0, 9.0, visuals=_vis("c1", "c2"))], clips)
+    _rows_ok(rows, track["total_us"])
+    assert {r["name"] for r in rows} == {"c1.mp4", "c2.mp4"}
+    dur = {"c1.mp4": 6.0, "c2.mp4": 8.0}
+    for r in rows:
+        assert r["in_us"] >= us(0.5) and r["in_us"] + r["dur_us"] <= us(dur[r["name"]] - 0.5)   # 不越过素材首尾 0.5s
+    assert all(a["name"] != b["name"] for a, b in zip(rows, rows[1:]))           # 同一素材不相邻
+
+
+def test_short_single_visual_is_supplemented_from_neighbour():
+    # A 只配了一个 6s 的素材，不够铺满：先用你指定的 c1，剩下的从相邻句的画面补，并报告回退
+    # （旧行为：整个跳过 c1，直接换成别的素材）
+    clips = _clips(("c1", 6), ("c2", 60), ("c3", 60))
+    items = [_line("Z", 1.0, 3.0, visuals=_vis("c3")), _line("A", 4.0, 12.0, visuals=_vis("c1")),
+             _line("B", 13.0, 15.0, visuals=_vis("c2"))]
+    rows, track, report = _lay(items, clips)
+    _rows_ok(rows, track["total_us"])
+    a_shots = next(i for i in report["items"] if i["item"] == "A")["shots"]
+    assert a_shots[0][0] == "c1" and len(a_shots) >= 2
+    assert any(f[0] == "A" and f[1] != "c1" for f in report["fallback"])
