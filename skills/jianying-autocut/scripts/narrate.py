@@ -377,6 +377,24 @@ def _try_place(c, at, d, speech):
     return a, round(score or 0, 3)
 
 
+def _place_in_free_segment(c, d):
+    """把长 d 的镜头放进素材 c 最长的空闲段（居中）。空闲段起点常不在 STEP 网格上，best_window 会错过它。"""
+    segs, cur = [], EDGE
+    for u0, u1 in sorted(c.used):
+        segs.append((cur, u0 - c.gap - cur))
+        cur = u1 + c.gap
+    segs.append((cur, c.dur - EDGE - cur))
+    a, length = max(segs, key=lambda x: x[1])
+    if length < d:
+        return None
+    a += (length - d) // 2
+    score = c.window_score(a, d)
+    if score is None or not c.free(a, d):
+        return None
+    c.used.append((a, a + d))
+    return a, round(score, 3)
+
+
 def _place_any(cands, clips, avoid, remaining, speech, partial):
     """按顺序在候选画面里放一个镜头。partial=False 要整块盖住 remaining；partial=True 取素材里最长的空闲段
     （至少 MIN_SHOT）。返回镜头 dict，放不下返回 None。"""
@@ -390,8 +408,8 @@ def _place_any(cands, clips, avoid, remaining, speech, partial):
             if d < MIN_SHOT:
                 continue
         w = _try_place(c, v.get("at"), d, speech)
-        if not w and partial and v.get("at") is not None:
-            w = _try_place(c, None, d, speech)        # 以 at 为中心放不下这么长，就取素材里能放的地方
+        if not w and partial:
+            w = _place_in_free_segment(c, d)          # 以 at 为中心 / 网格上都放不下：直接放进最长的空闲段
         if w:
             return {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1]}
     return None

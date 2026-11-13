@@ -560,3 +560,13 @@ def test_short_single_visual_is_supplemented_from_neighbour():
     a_shots = next(i for i in report["items"] if i["item"] == "A")["shots"]
     assert a_shots[0][0] == "c1" and len(a_shots) >= 2
     assert any(f[0] == "A" and f[1] != "c1" for f in report["fallback"])
+
+
+def test_partial_fill_uses_off_grid_free_segment():
+    # 素材前面被占到 3.85s（加 1s 间隔，空闲段从 4.85s 起，不在 0.5s 网格上）：放得下多少就放多少，
+    # 应该能把剩下的整段空闲用上，而不是因为网格对不上而放弃
+    from narrate import _place_any
+    clips = _clips(("c1", 10.8))
+    clips["c1"].used.append((us(0.5), us(3.85)))
+    shot = _place_any([{"clip_id": "c1", "at": 2.0}], clips, set(), us(8.0), {}, True)
+    assert shot is not None and shot["in_us"] == us(4.85) and shot["dur_us"] == us(10.3) - us(4.85)
