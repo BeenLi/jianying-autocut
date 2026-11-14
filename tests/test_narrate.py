@@ -621,3 +621,59 @@ def test_draft_with_script_offscript_keeps_previous_chapter_and_unique_id():
     items = draft_plan(speech, script)["items"]
     assert items[0]["id"] == "B" and items[1]["chapter"] == "c2" and items[1]["skip"]
     assert items[1]["id"] not in {"B"} and len({i["id"] for i in items}) == 2
+
+
+# ---------- 整分支审查（C1 / C2 / I1 / I3 / 回归） ----------
+
+def test_split_sentence_halves_merge_into_one_item():                # C1：拆成两段的一句不能出重复 id
+    script = [{"id": "A", "text": "凌晨四点我们从山脚出发，天还没有亮，只有头灯照着脚下的石阶"}]
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 20.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 4.0, "text": "凌晨四点我们从山脚出发，天还没有亮，"},
+                               {"start": 4.4, "end": 7.0, "text": "只有头灯照着脚下的石阶。"}]}}
+    items = draft_plan(speech, script)["items"]
+    kept = [i for i in items if not i.get("skip")]
+    assert [(i["id"], i["start"], i["end"]) for i in kept] == [("A", 0.5, 7.0)]
+    assert validate(draft_plan(speech, script), {}, {"n1": 20.0})[0] == []
+
+
+def test_split_by_script_single_word_token_does_not_crash():         # C2
+    script = [{"id": "A", "text": "好的。"}, {"id": "B", "text": "走吧。"}]
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 9.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 2.0, "text": "好的走吧",
+                                "words": [{"start": 0.5, "end": 2.0, "word": "好的走吧"}]}]}}
+    assert len(draft_plan(speech, script)["items"]) == 1
+
+
+def test_split_by_script_gives_up_when_it_cannot_cut_every_sentence():   # I3：切不开就别并错
+    script = [{"id": "A", "text": "我们出发。"}, {"id": "B", "text": "我们下山。"}, {"id": "C", "text": "回家吃饭。"}]
+    heard = "我们出发我们下山回家吃饭"
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 9.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 3.0, "text": heard,
+                                "words": [{"start": 0.5, "end": 1.5, "word": "我们出发"}, {"start": 1.6, "end": 3.0, "word": "我们下山回家吃饭"}]}]}}
+    items = draft_plan(speech, script)["items"]
+    assert len(items) == 1 and (items[0].get("note") or "")    # 整段保留，note 提示
+
+
+def test_draft_without_chapters_keeps_default_title():               # 回归：以前叫「旁白」
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 9.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 2.0, "text": "山顶的风特别大"}]}}
+    assert draft_plan(speech, [{"id": "B", "text": "山顶的风特别大。"}])["chapters"] == [{"id": "ch1", "title": "旁白"}]
+
+
+def test_layout_never_leaves_a_sub_two_second_shot():                # I1：审查枚举出的反例族
+    from plan import MIN_SHOT
+    bad = []
+    for c2d in (6.0, 7.5, 9.0, 10.5, 12.0):
+        for L in (6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0):
+            clips = _clips(("c1", 5.0), ("c2", c2d), ("c3", 2.8))
+            items = [_line("B", 1.0, 2.0, visuals=_vis("c2")), _line("A", 3.5, 3.5 + L, visuals=_vis("c1", "c3"))]
+            try:
+                rows, _, report = _lay(items, clips)
+            except ValueError:
+                continue
+            # 素材确实凑不出 ≥2s 时可以留短镜头，但必须在报告里说出来（不能悄悄违反）
+            short = [r for r in rows if r["dur_us"] < MIN_SHOT]
+            if short and not any("不到" in w and "A" in w for w in report["warns"]):
+                bad += [(c2d, L, r["name"], r["dur_us"]) for r in short]
+            bad += [(c2d, L, "相邻", a["name"]) for a, b in zip(rows, rows[1:]) if a["name"] == b["name"]]
+    assert bad == []
