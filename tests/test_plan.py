@@ -157,6 +157,15 @@ def test_rhythm_reorder_breaks_runs_with_small_moves():
     assert not any(a == b == c == "short" for a, b, c in zip(ks, ks[1:], ks[2:]))
 
 
+def test_rhythm_reorder_never_moves_the_last_shot():          # 问题 5：片尾 / 章尾镜头是故事的落点
+    from plan import rhythm_reorder
+    shots = [{"kind": k, "i": i} for i, k in enumerate(["short", "long", "long", "short"])]
+    assert rhythm_reorder(shots)[-1]["i"] == 3
+    shots = [{"kind": k, "i": i} for i, k in enumerate(["mid", "long", "long", "short", "long"])]
+    out = rhythm_reorder(shots)
+    assert out[-1]["i"] == 4 and not any(a["kind"] == b["kind"] == "long" for a, b in zip(out, out[1:]))
+
+
 def test_rhythm_reorder_keeps_good_order():
     from plan import rhythm_reorder
     shots = [{"kind": k, "i": i} for i, k in enumerate(["long", "short", "short", "mid", "long"])]
@@ -372,3 +381,48 @@ def test_broken_story_plan_json_is_readable_error(tmp_path):      # A4
     with pytest.raises(SystemExit) as e:
         load_story(w)
     assert "story_plan.json" in str(e.value) and "第 2 行" in str(e.value)
+
+
+def test_second_pin_inside_first_shot_is_not_reported_as_dropped(capsys):   # 问题 4
+    import random
+    from plan import Clip, place_pins
+    row = {"clip_id": "c1", "path": "/x/c1.mp4", "name": "c1.mp4", "shot_time": "2026-10-05T00:00:00", "duration_s": 20}
+    c = Clip(row, [(t * US, 0.8, 0) for t in range(20)], [])
+    rhythm = [("long", 14, 14)]                        # 第一个 pin 的镜头 14s，会盖住第二个 pin
+    shots, _, _ = place_pins({"c1": c}, 60 * US, random.Random(1), [{"clip_id": "c1", "at": 8}, {"clip_id": "c1", "at": 12}], rhythm)
+    out = capsys.readouterr().out
+    assert len(shots) == 1 and shots[0]["in_us"] <= 12 * US < shots[0]["in_us"] + shots[0]["dur_us"]
+    assert "放不下" not in out and "已包含在" in out
+
+
+def test_talk_pin_cover_keeps_whole_sentence(capsys):            # 问题 3：节奏抽到的长镜头比整句短也不能剪断
+    import random
+    from plan import Clip, place_pins
+    row = {"clip_id": "c1", "path": "/x/c1.mp4", "name": "c1.mp4", "shot_time": "2026-10-05T00:00:00", "duration_s": 15.2}
+    c = Clip(row, [(t * US, 0.8, 0) for t in range(16)], [])
+    shots, _, _ = place_pins({"c1": c}, 60 * US, random.Random(1),
+                             [{"clip_id": "c1", "at": 7.4, "cover": [0.94, 13.94]}], [("long", 12.0, 12.9)])
+    a, d = shots[0]["in_us"], shots[0]["dur_us"]
+    assert a <= round(0.94 * US) and a + d >= round(13.94 * US)
+
+
+def _cover_case(bad, cover, capsys):
+    import random
+    from plan import Clip, place_pins
+    row = {"clip_id": "c1", "path": "/x/c1.mp4", "name": "c1.mp4", "shot_time": "2026-10-05T00:00:00", "duration_s": 30}
+    c = Clip(row, [(t * US, 0.8, int(t in bad)) for t in range(31)], [])
+    shots, _, _ = place_pins({"c1": c}, 60 * US, random.Random(1), [{"clip_id": "c1", "at": 8.0, "cover": cover}], [("long", 10.0, 10.0)])
+    a, d = shots[0]["in_us"], shots[0]["dur_us"]
+    return a <= round(cover[0] * US) and a + d >= round(cover[1] * US), capsys.readouterr().out
+
+
+def test_cover_finds_window_off_center_when_center_has_bad_frame(capsys):   # I2
+    covers, out = _cover_case((4,), [5.0, 11.0], capsys)
+    assert covers and "剪断" not in out
+
+
+def test_cover_warns_whenever_sentence_cannot_be_covered(capsys):            # I2：别静默剪断
+    covers, out = _cover_case((6,), [5.0, 11.0], capsys)                       # 句内坏帧
+    assert not covers and "剪断" in out
+    covers, out = _cover_case((), [0.2, 6.0], capsys)                          # 句首在素材首 0.5s 内
+    assert not covers and "剪断" in out

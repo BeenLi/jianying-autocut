@@ -532,3 +532,148 @@ def test_main_reports_broken_plan_json(tmp_path):              # A4
     with pytest.raises(SystemExit) as e:
         main(["--work", w])
     assert "narration_plan.json" in str(e.value) and "第 2 行" in str(e.value)
+
+
+# ---------- 端到端发现：画面素材比这句旁白短 ----------
+
+def test_line_longer_than_each_visual_is_covered_by_several():
+    # 8s 的句子加片头片尾约 10.6s，均分成两块各 5.3s；c1 只有 5s 可用、c2 有 7s（整槽约 11.1s）：
+    # 应该先用满 c1、零头并给下一块的 c2，而不是把 c2 挪到第一块、第二块没得放而报"没有可用的素材"
+    clips = _clips(("c1", 6), ("c2", 8))
+    rows, track, report = _lay([_line("L1", 1.0, 9.0, visuals=_vis("c1", "c2"))], clips)
+    _rows_ok(rows, track["total_us"])
+    assert {r["name"] for r in rows} == {"c1.mp4", "c2.mp4"}
+    dur = {"c1.mp4": 6.0, "c2.mp4": 8.0}
+    for r in rows:
+        assert r["in_us"] >= us(0.5) and r["in_us"] + r["dur_us"] <= us(dur[r["name"]] - 0.5)   # 不越过素材首尾 0.5s
+    assert all(a["name"] != b["name"] for a, b in zip(rows, rows[1:]))           # 同一素材不相邻
+
+
+def test_short_single_visual_is_supplemented_from_neighbour():
+    # A 只配了一个 6s 的素材，不够铺满：先用你指定的 c1，剩下的从相邻句的画面补，并报告回退
+    # （旧行为：整个跳过 c1，直接换成别的素材）
+    clips = _clips(("c1", 6), ("c2", 60), ("c3", 60))
+    items = [_line("Z", 1.0, 3.0, visuals=_vis("c3")), _line("A", 4.0, 12.0, visuals=_vis("c1")),
+             _line("B", 13.0, 15.0, visuals=_vis("c2"))]
+    rows, track, report = _lay(items, clips)
+    _rows_ok(rows, track["total_us"])
+    a_shots = next(i for i in report["items"] if i["item"] == "A")["shots"]
+    assert a_shots[0][0] == "c1" and len(a_shots) >= 2
+    assert any(f[0] == "A" and f[1] != "c1" for f in report["fallback"])
+
+
+def test_partial_fill_uses_off_grid_free_segment():
+    # 素材前面被占到 3.85s（加 1s 间隔，空闲段从 4.85s 起，不在 0.5s 网格上）：放得下多少就放多少，
+    # 应该能把剩下的整段空闲用上，而不是因为网格对不上而放弃
+    from narrate import _place_any
+    clips = _clips(("c1", 10.8))
+    clips["c1"].used.append((us(0.5), us(3.85)))
+    shot = _place_any([{"clip_id": "c1", "at": 2.0}], clips, set(), us(8.0), {}, True)
+    assert shot is not None and shot["in_us"] == us(4.85) and shot["dur_us"] == us(10.3) - us(4.85)
+
+
+def test_last_piece_leaves_no_sliver_and_borrowed_visual_ignores_its_at():
+    # A 的槽比 c1 的可用长度只多一点：不能用满 c1 后剩一个不到 2s、放不下也并不进去的零头，
+    # 要给借来的画面留够 2s；借来的 c3 带着 Z 的 at=2.0（Z 自己已经用掉那一段），借用时不受它约束
+    clips = _clips(("c1", 9), ("c2", 30), ("c3", 30))
+    items = [_line("Z", 1.0, 3.0, visuals=[{"clip_id": "c3", "at": 2.0}]),
+             _line("A", 4.0, 12.5, visuals=_vis("c1")),
+             _line("B", 13.5, 15.5, visuals=_vis("c2"))]
+    rows, track, report = _lay(items, clips)
+    _rows_ok(rows, track["total_us"])
+    assert all(r["dur_us"] >= us(2.0) for r in rows)
+    a_shots = next(i for i in report["items"] if i["item"] == "A")["shots"]
+    assert [s[0] for s in a_shots] == ["c1", "c3"]
+
+
+# ---------- 端到端发现：有稿子时的初稿（问题 7–10） ----------
+
+def _words(text, t0, gaps=None, step=0.2):
+    """逐字时间：每个字 step 秒；gaps={字下标: 额外停顿秒}（加在这个字之前）。"""
+    out, t = [], t0
+    for k, ch in enumerate(text):
+        t += (gaps or {}).get(k, 0)
+        out.append({"start": round(t, 3), "end": round(t + step, 3), "word": ch})
+        t += step
+    return out
+
+
+def test_draft_with_script_splits_fluent_file_and_uses_script_ids_text_chapters():
+    heard = "这是我到枸杞岛的第一个半晚可就在几个小时前我还以为这趟旅行要泡汤了"   # 一整段，同音错字「半晚」
+    w = _words(heard, 0.5, gaps={13: 0.6})                                      # 两句之间停 0.6s
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 20.0}, "silences": {},
+              "lines": {"n1": [{"start": w[0]["start"], "end": w[-1]["end"], "text": heard, "words": w}]}}
+    script = [{"id": "L02", "text": "这是我到枸杞岛的第一个傍晚。", "chapter": "ch1", "chapter_title": "想多住几天"},
+              {"id": "L03", "text": "可就在几个小时前，我还以为这趟旅行要泡汤了。", "chapter": "ch1"}]
+    plan = draft_plan(speech, script)
+    items = plan["items"]
+    assert [i["id"] for i in items] == ["L02", "L03"]                                   # 问题 9：用稿子的 id
+    assert [i["text"] for i in items] == [s["text"] for s in script]                   # 问题 8：用稿子的字
+    assert all(i["chapter"] == "ch1" for i in items) and plan["chapters"] == [{"id": "ch1", "title": "想多住几天"}]
+    assert items[0]["end"] == w[12]["end"] and items[1]["start"] == w[13]["start"]     # 问题 7：切在停顿上
+
+
+def test_draft_with_script_offscript_keeps_previous_chapter_and_unique_id():
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 20.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 2.0, "text": "山顶的风特别大"},
+                               {"start": 3.0, "end": 4.0, "text": "哎这个录上了吗"}]}}
+    script = [{"id": "B", "text": "山顶的风特别大。", "chapter": "c2"}]
+    items = draft_plan(speech, script)["items"]
+    assert items[0]["id"] == "B" and items[1]["chapter"] == "c2" and items[1]["skip"]
+    assert items[1]["id"] not in {"B"} and len({i["id"] for i in items}) == 2
+
+
+# ---------- 整分支审查（C1 / C2 / I1 / I3 / 回归） ----------
+
+def test_split_sentence_halves_merge_into_one_item():                # C1：拆成两段的一句不能出重复 id
+    script = [{"id": "A", "text": "凌晨四点我们从山脚出发，天还没有亮，只有头灯照着脚下的石阶"}]
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 20.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 4.0, "text": "凌晨四点我们从山脚出发，天还没有亮，"},
+                               {"start": 4.4, "end": 7.0, "text": "只有头灯照着脚下的石阶。"}]}}
+    items = draft_plan(speech, script)["items"]
+    kept = [i for i in items if not i.get("skip")]
+    assert [(i["id"], i["start"], i["end"]) for i in kept] == [("A", 0.5, 7.0)]
+    assert validate(draft_plan(speech, script), {}, {"n1": 20.0})[0] == []
+
+
+def test_split_by_script_single_word_token_does_not_crash():         # C2
+    script = [{"id": "A", "text": "好的。"}, {"id": "B", "text": "走吧。"}]
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 9.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 2.0, "text": "好的走吧",
+                                "words": [{"start": 0.5, "end": 2.0, "word": "好的走吧"}]}]}}
+    assert len(draft_plan(speech, script)["items"]) == 1
+
+
+def test_split_by_script_gives_up_when_it_cannot_cut_every_sentence():   # I3：切不开就别并错
+    script = [{"id": "A", "text": "我们出发。"}, {"id": "B", "text": "我们下山。"}, {"id": "C", "text": "回家吃饭。"}]
+    heard = "我们出发我们下山回家吃饭"
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 9.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 3.0, "text": heard,
+                                "words": [{"start": 0.5, "end": 1.5, "word": "我们出发"}, {"start": 1.6, "end": 3.0, "word": "我们下山回家吃饭"}]}]}}
+    items = draft_plan(speech, script)["items"]
+    assert len(items) == 1 and (items[0].get("note") or "")    # 整段保留，note 提示
+
+
+def test_draft_without_chapters_keeps_default_title():               # 回归：以前叫「旁白」
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 9.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 2.0, "text": "山顶的风特别大"}]}}
+    assert draft_plan(speech, [{"id": "B", "text": "山顶的风特别大。"}])["chapters"] == [{"id": "ch1", "title": "旁白"}]
+
+
+def test_layout_never_leaves_a_sub_two_second_shot():                # I1：审查枚举出的反例族
+    from plan import MIN_SHOT
+    bad = []
+    for c2d in (6.0, 7.5, 9.0, 10.5, 12.0):
+        for L in (6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0):
+            clips = _clips(("c1", 5.0), ("c2", c2d), ("c3", 2.8))
+            items = [_line("B", 1.0, 2.0, visuals=_vis("c2")), _line("A", 3.5, 3.5 + L, visuals=_vis("c1", "c3"))]
+            try:
+                rows, _, report = _lay(items, clips)
+            except ValueError:
+                continue
+            # 素材确实凑不出 ≥2s 时可以留短镜头，但必须在报告里说出来（不能悄悄违反）
+            short = [r for r in rows if r["dur_us"] < MIN_SHOT]
+            if short and not any("不到" in w and "A" in w for w in report["warns"]):
+                bad += [(c2d, L, r["name"], r["dur_us"]) for r in short]
+            bad += [(c2d, L, "相邻", a["name"]) for a, b in zip(rows, rows[1:]) if a["name"] == b["name"]]
+    assert bad == []

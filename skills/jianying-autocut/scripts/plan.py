@@ -23,7 +23,7 @@
   静音   入点 1.5s 内有静音段就把镜头整体挪过去，少切在半句话上（不再判断有没有人说话）
   交替   章节带 intercut 时做平行蒙太奇：两条线（a / b）轮流出镜头，各线内按拍摄时间，最后落在 end_on
   顺序   hook 章放最前（冷开场），其余按 story_plan 顺序；章内大体按拍摄时间，
-         镜头最多挪 2 位来避免连续长镜头 / 三连短镜头
+         镜头最多挪 2 位来避免连续长镜头 / 三连短镜头；每章最后一个镜头不动
 所有时间内部都是整数微秒；挑不满的章节把差额外溢给有余量的章节，总长一微秒都不差。
 """
 import argparse
@@ -256,9 +256,29 @@ def place_pins(pool, quota, rng, pins, rhythm=RHYTHM):
             why = "素材不在本章可选范围" if c is None else "本章配额已用完（给章节加 share 或减少 pins）"
             print(f"  ⚠ pin {p['clip_id']}@{p['at']}s 没放进去：{why}")
             continue
-        w = place_pin(c, round(float(p["at"]) * US), d)
+        at = round(float(p["at"]) * US)
+        w = None
+        if p.get("cover"):   # 口播：镜头至少盖住整句（节奏抽到的长度不够就加长），整句居中
+            s0, e0 = (round(float(x) * US) for x in p["cover"])
+            need = e0 - s0
+            d = max(d, min(need, c.longest_free(), remaining))
+            lo, hi = max(EDGE, e0 - d), min(s0, c.dur - EDGE - d)      # 能盖住整句的入点范围
+            mid = s0 - (d - need) // 2
+            starts = sorted({lo, hi, min(max(mid, lo), hi)} | set(range(lo, hi + 1, STEP)), key=lambda x: abs(x - mid))
+            w = next(((x, d) for x in starts if lo <= hi and c.feasible(x, d)), None)
+            if w is None:
+                why = (f"只放得下 {d / US:.1f}s" if d < need else
+                       "句子贴着素材开头 / 结尾（首尾 0.5s 不取）" if s0 < EDGE or e0 > c.dur - EDGE else
+                       "句子范围里有坏帧或已被占用")
+                print(f"  ⚠ 口播 {p['clip_id']}@{p['at']}s 整句 {need / US:.1f}s：{why}，句子会被剪断")
+        w = w or place_pin(c, at, d)
         if not w:
-            print(f"  ⚠ pin {p['clip_id']}@{p['at']}s 放不下（坏帧或已占用），跳过")
+            inside = next((s for s in shots if s["clip"] is c and s["in_us"] <= at < s["in_us"] + s["dur_us"]), None)
+            if inside:   # 这一刻已经在同素材前一个镜头里，不缺画面，不算丢
+                print(f"  · pin {p['clip_id']}@{p['at']}s 已包含在同素材的镜头 "
+                      f"{inside['in_us'] / US:.1f}–{(inside['in_us'] + inside['dur_us']) / US:.1f}s 里，不另起镜头")
+            else:
+                print(f"  ⚠ pin {p['clip_id']}@{p['at']}s 放不下（坏帧或已占用），跳过")
             continue
         k += 1
         a, d = w
@@ -379,7 +399,7 @@ def _rhythm_bad(seq):
 
 
 def rhythm_reorder(shots, budget=20000):
-    """章内镜头已按拍摄时间排好：在每个镜头最多挪 MAX_SHIFT 位的前提下，消掉连续长镜头和三连短镜头。
+    """章内镜头已按拍摄时间排好：在每个镜头最多挪 MAX_SHIFT 位、最后一个镜头不动的前提下，消掉连续长镜头和三连短镜头。
     小范围回溯搜索，优先保持原顺序；搜不到可行解（或超出步数）就原样返回。"""
     n = len(shots)
     out, used, steps = [], [False] * n, [0]
@@ -392,6 +412,8 @@ def rhythm_reorder(shots, budget=20000):
             return False
         forced = [i for i in range(n) if not used[i] and i <= p - MAX_SHIFT]
         cands = forced or [i for i in range(max(0, p - MAX_SHIFT), min(n, p + MAX_SHIFT + 1)) if not used[i]]
+        # 最后一个镜头是这一章（往往也是全片）的落点：只放在最后，别的位置不选它
+        cands = [n - 1] if p == n - 1 else [i for i in cands if i != n - 1]
         for i in cands:
             out.append(shots[i])
             if not _rhythm_bad(out):

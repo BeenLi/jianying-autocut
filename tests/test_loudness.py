@@ -142,3 +142,13 @@ def test_mean_short_is_energy_mean():                           # B7
     v = mean_short([(0.1, -20.0), (0.2, -30.0), (5.0, 0.0)], 0.0, 1.0)
     assert abs(v - 10 * math.log10((10 ** -2 + 10 ** -3) / 2)) < 1e-9
     assert mean_short([(0.1, -20.0)], 3.0, 4.0) is None
+
+
+def test_margin_warnings_custom_hint():                          # 问题 6
+    w = margin_warnings([(0, US)], lambda a, b: -20.0, [-16.0], hint="调低 bgm_plan.json 里的 gain")
+    assert len(w) == 1 and w[0].endswith("调低 bgm_plan.json 里的 gain") and "--bgm" not in w[0]
+
+
+def test_bgm_duck_uses_actual_voice_level():                     # 问题 13：人声没提到 -16 时 BGM 要压得更低
+    d = bgm_duck([(-6.0, -8.0, -22.0)])                          # -22-12-(-8)-(-6) = -20 dB
+    assert round(db(d), 6) == -20.0

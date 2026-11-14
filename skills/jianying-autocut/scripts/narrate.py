@@ -209,6 +209,97 @@ def align_to_script(lines, script):
     return out, [s["id"] for s in script if s["id"] not in last]
 
 
+MULTI_GAIN = 0.15        # 一段转写对上连续几句稿子，比对上最像的单句至少好这么多，才按稿子切开
+MULTI_MAX = 8            # 一段转写最多按几句稿子切
+SAME_TEXT = 0.9          # 念的和稿子相似度低于它，在 note 里留下实际念的内容
+
+
+def _split_by_script(lines, script):
+    """流畅朗读时 Whisper 会把一个文件转成一整段：这段如果对上连续几句稿子，就按各句字数比例
+    在逐字时间里切开，切点吸附到附近（±2 个字）停顿最长的地方。没有逐字时间的不切。"""
+    out = []
+    for l in lines:
+        ws = l.get("words") or []
+        lens = [len(_norm(w["word"])) for w in ws]
+        best1 = max((_ratio(l["text"], x["text"]) for x in script), default=0)
+        run = None
+        if sum(lens) >= 4:
+            for i in range(len(script)):
+                for j in range(i + 2, min(len(script), i + MULTI_MAX) + 1):
+                    r = _ratio(l["text"], "".join(x["text"] for x in script[i:j]))
+                    if r >= SCRIPT_RATIO and r > best1 + MULTI_GAIN and (run is None or r > run[0]):
+                        run = (r, i, j)
+        if run is None:
+            out.append(l)
+            continue
+        parts = script[run[1]:run[2]]
+        if len(ws) < len(parts):              # 逐字时间太粗（一个词就是半句），切不开
+            out.append(dict(l, split_fail=[x["id"] for x in parts]))
+            continue
+        slen = [max(1, len(_norm(x["text"]))) for x in parts]
+        cum = [sum(lens[:k + 1]) for k in range(len(ws))]
+        cuts, acc = [], 0
+        for n in slen[:-1]:
+            acc += n
+            target = acc / sum(slen) * cum[-1]
+            k0 = min(range(len(ws) - 1), key=lambda k: abs(cum[k] - target))
+            near = [k for k in range(max(0, k0 - 2), min(len(ws) - 1, k0 + 3)) if not cuts or k > cuts[-1]]
+            if not near:
+                break
+            cuts.append(max(near, key=lambda k: (ws[k + 1]["start"] - ws[k]["end"]) - 0.02 * abs(cum[k] - target)))
+        if len(cuts) < len(parts) - 1:        # 切不出每一句：整段保留，别把两句并成一段再对到其中一句
+            out.append(dict(l, split_fail=[x["id"] for x in parts]))
+            continue
+        a = 0
+        for c in cuts + [len(ws) - 1]:
+            piece = ws[a:c + 1]
+            out.append(dict(l, start=piece[0]["start"], end=piece[-1]["end"],
+                            text="".join(w["word"] for w in piece), words=piece))
+            a = c + 1
+    return out
+
+
+def _apply_script(lines, script):
+    """对上稿子的句子：id、文字、章节都用稿子的（页面导出时就能一一对应）；稿外的句子沿用前一句的章节，
+    另编 X 开头的 id。返回 (lines, chapters)。"""
+    meta = {x["id"]: x for x in script}
+    first_ch = next((x["chapter"] for x in script if x.get("chapter")), None)
+    cur, titles, order, extra, takes, out = first_ch or "ch1", {}, [], 0, {}, []
+    for l in lines:
+        sid = l.pop("script_id", None)
+        fail = l.pop("split_fail", None)
+        prev = out[-1] if out else None
+        if (sid is not None and not l.get("skip") and prev is not None and prev["id"] == sid
+                and prev.get("file") == l.get("file")):
+            prev["end"] = l["end"]            # Whisper 把一句拆成了两段：并回一句（和页面一一对应）
+            continue
+        if sid is not None:
+            x = meta[sid]
+            cur = x.get("chapter") or cur
+            if x.get("chapter_title") and cur not in titles:
+                titles[cur] = x["chapter_title"]
+            if l.get("skip"):                     # 被替掉的那几遍：留着可恢复，id 加后缀
+                takes[sid] = takes.get(sid, 0) + 1
+                l["id"] = f"{sid}-{takes[sid]}"
+            else:
+                l["id"] = sid
+                if _ratio(l["text"], x["text"]) < SAME_TEXT:
+                    l["note"] = f"转写和稿子差得较多（可能是同音字，也可能念得不一样）：{l['text']}。字幕用稿子，念的不一样就改 text"
+                l["text"] = x["text"]
+        else:
+            extra += 1
+            l["id"] = f"X{extra:02d}"
+        if fail:
+            l["note"] = (f"这段连着念了稿子 {'、'.join(fail)} 几句，逐字时间太粗没切开，时间按整段算；"
+                         "需要的话手动拆成几句。" + (" " + l["note"] if l.get("note") else ""))
+        l["chapter"] = cur
+        if cur not in order:
+            order.append(cur)
+        out.append(l)
+    default = "旁白" if first_ch is None else None
+    return out, [{"id": c, "title": titles.get(c, default or c)} for c in order]
+
+
 def draft_plan(speech, script=None):
     """narration_speech.json → narration_plan.json 初稿（visuals 留空，等 Claude 配画面）。"""
     lines = []
@@ -216,15 +307,18 @@ def draft_plan(speech, script=None):
         for l in speech["lines"].get(fid, []):
             lines.append({"type": "line", "chapter": "ch1", "file": fid, "start": l["start"], "end": l["end"],
                           "text": l["text"], "visuals": [], "words": l.get("words", [])})
-    missing = []
+    missing, chapters = [], [{"id": "ch1", "title": "旁白"}]
     if script:
-        lines, missing = align_to_script(lines, script)
+        lines, missing = align_to_script(_split_by_script(lines, script), script)
+        lines, chapters = _apply_script(lines, script)
     else:
         lines = mark_retakes(lines)
+        for k, l in enumerate(lines, 1):
+            l["id"] = f"L{k:02d}"
     for l in lines:
         l.pop("words", None)            # 逐字时间只给找重录用，不进 plan
-    plan = {"files": dict(speech["files"]), "chapters": [{"id": "ch1", "title": "旁白"}],
-            "items": [{"id": f"L{k:02d}", **l} for k, l in enumerate(lines, 1)]}
+    plan = {"files": dict(speech["files"]), "chapters": chapters,
+            "items": [{"id": l.pop("id"), **l} for l in lines]}
     if missing:
         plan["missing_script"] = missing
     return plan
@@ -377,15 +471,57 @@ def _try_place(c, at, d, speech):
     return a, round(score or 0, 3)
 
 
-def _extend(shot, extra):
-    """把上一个镜头往后延长 extra；素材不够长、碰到坏帧或别的占用就返回 False。"""
+def _place_in_free_segment(c, d):
+    """把长 d 的镜头放进素材 c 最长的空闲段（居中）。空闲段起点常不在 STEP 网格上，best_window 会错过它。"""
+    segs, cur = [], EDGE
+    for u0, u1 in sorted(c.used):
+        segs.append((cur, u0 - c.gap - cur))
+        cur = u1 + c.gap
+    segs.append((cur, c.dur - EDGE - cur))
+    a, length = max(segs, key=lambda x: x[1])
+    if length < d:
+        return None
+    a += (length - d) // 2
+    score = c.window_score(a, d)
+    if score is None or not c.free(a, d):
+        return None
+    c.used.append((a, a + d))
+    return a, round(score, 3)
+
+
+def _place_any(cands, clips, avoid, remaining, speech, partial, last=False):
+    """按顺序在候选画面里放一个镜头。partial=False 要整块盖住 remaining；partial=True 取素材里最长的空闲段
+    （至少 MIN_SHOT）。last=True（本槽最后一块）时不留不足 MIN_SHOT 的零头：零头没有下一块可挪。
+    返回镜头 dict，放不下返回 None。"""
+    for v in cands:
+        c = clips.get(v["clip_id"])
+        if c is None or c.clip_id in avoid:
+            continue
+        d = remaining
+        if partial:
+            d = min(c.longest_free(), remaining)
+            if last and 0 < remaining - d < MIN_SHOT:
+                d = remaining - MIN_SHOT
+            if d < MIN_SHOT:
+                continue
+        w = _try_place(c, v.get("at"), d, speech)
+        if not w and partial:
+            w = _place_in_free_segment(c, d)          # 以 at 为中心 / 网格上都放不下：直接放进最长的空闲段
+        if w:
+            return {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1]}
+    return None
+
+
+def _extend(shot, extra, head=False):
+    """把镜头延长 extra（head=True 时入点往前挪，出点不动）；素材不够长、碰到坏帧或别的占用就返回 False。
+    extra 为负就是剪短（总是可行，只要剩下的不短于 0）。"""
     c, a, d = shot["clip"], shot["in_us"], shot["dur_us"]
-    nd = d + extra
+    na, nd = (a - extra if head else a), d + extra
     c.used.remove((a, a + d))
-    ok = a + nd <= c.dur - EDGE and c.free(a, nd) and c.window_score(a, nd) is not None
-    c.used.append((a, a + (nd if ok else d)))
+    ok = nd > 0 and EDGE <= na and na + nd <= c.dur - EDGE and c.free(na, nd) and c.window_score(na, nd) is not None
+    c.used.append((na, na + nd) if ok else (a, a + d))
     if ok:
-        shot["dur_us"] = nd
+        shot["in_us"], shot["dur_us"] = na, nd
     return ok
 
 
@@ -479,7 +615,8 @@ def layout(plan, clips, speech, silences, file_durs, opts):
             if prev_shot["kind"] != "live" and prev_shot["clip"].clip_id != next_live and _extend(prev_shot, L):
                 continue
         j = line_slots.index(k)
-        neighbours = [v for jj in (j - 1, j + 1) if 0 <= jj < len(line_slots)
+        # 借来的画面不带原句的 at：那一刻是原句自己要用的，借用只取素材里还空着的地方
+        neighbours = [{"clip_id": v["clip_id"]} for jj in (j - 1, j + 1) if 0 <= jj < len(line_slots)
                       for v in items[sl[line_slots[jj]]["item"]].get("visuals", [])]
         n = max(1, min(len(vis), L // MIN_SHOT)) if vis else 1
         pieces = [L // n] * (n - 1) + [L - L // n * (n - 1)]
@@ -491,34 +628,57 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                 avoid = {last["clip"].clip_id} if last else set()
                 if i == len(pieces) - 1 and next_live:
                     avoid.add(next_live)
-                cands = ([vis[i]] if i < len(vis) else []) + [v for v in vis if v is not (vis[i] if i < len(vis) else None)] \
-                    + neighbours
-                placed = None
-                for v in cands:
-                    c = clips.get(v["clip_id"])
-                    if c is None or c.clip_id in avoid:
-                        continue
-                    w = _try_place(c, v.get("at"), remaining, speech)
-                    if w:
-                        placed = {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": remaining, "score": w[1]}
-                        if v not in vis:
-                            report["fallback"].append((it["id"], c.clip_id))
-                        break
+                own = ([vis[i]] if i < len(vis) else []) + [v for v in vis if v is not (vis[i] if i < len(vis) else None)]
+                others = [clips[c] for c in pool.get(it["chapter"], []) if c not in avoid]
+                # 先找能整块盖住的；素材都比这块短时，放得下多少放多少，剩下的交给下一个候选。
+                # 本块指定的画面最优先，其次本句别的画面，最后才是借来的（相邻句的画面、本章出现过的素材）
+                tail = i == len(pieces) - 1
+
+                def place(rem, avoid=avoid, own=own, others=others, tail=tail):
+                    p_ = (_place_any(own[:1], clips, avoid, rem, speech, False)
+                          or _place_any(own[:1], clips, avoid, rem, speech, True, tail)
+                          or _place_any(own[1:], clips, avoid, rem, speech, False)
+                          or _place_any(own[1:], clips, avoid, rem, speech, True, tail)
+                          or _place_any(neighbours, clips, avoid, rem, speech, False))
+                    pool_ = [c for c in others if c.clip_id not in avoid]
+                    if p_ is None:
+                        with _Penalties(pool_, speech):
+                            p_ = pick_one(pool_, rem, "narr")
+                        if p_ is not None:
+                            p_["kind"] = "narr"
+                    return p_ or _place_any(neighbours + [{"clip_id": c.clip_id} for c in pool_],
+                                            clips, avoid, rem, speech, True, tail)
+                placed = place(remaining)
                 if placed is None:
-                    others = [clips[c] for c in pool.get(it["chapter"], []) if c not in avoid]
-                    with _Penalties(others, speech):
-                        shot = pick_one(others, remaining, "narr")
-                    if shot is None:
-                        raise ValueError(f"章节 {it['chapter']}（{it['id']}）没有可用的素材来铺这句旁白")
-                    shot["kind"] = "narr"
-                    placed = shot
-                    report["fallback"].append((it["id"], shot["clip"].clip_id))
+                    raise ValueError(f"章节 {it['chapter']}（{it['id']}）没有可用的素材来铺这句旁白："
+                                     f"本句和相邻句的画面都被占用或不够 {MIN_SHOT / US:g}s，给这句多配一两个画面")
+                if placed["clip"].clip_id not in {v["clip_id"] for v in own}:
+                    report["fallback"].append((it["id"], placed["clip"].clip_id))
                 got.append(placed)
                 remaining -= placed["dur_us"]
                 if 0 < remaining < MIN_SHOT:
-                    # 零头不单独成镜头：并进本槽里能延长的镜头（延长前面的镜头只是把后面的往后推）
-                    if any(_extend(g, remaining) for g in reversed(got)):
+                    # 零头不单独成镜头：并进本槽里能延长的镜头（往后延长，或入点往前挪），
+                    # 并不进去就挪给下一块；最后一块就把刚放的镜头剪短，凑出一个够 MIN_SHOT 的镜头
+                    if any(_extend(g, remaining) for g in reversed(got)) or \
+                            any(_extend(g, remaining, head=True) for g in reversed(got)):
                         remaining = 0
+                    elif i + 1 < len(pieces):
+                        pieces[i + 1] += remaining
+                        remaining = 0
+                    else:
+                        cut = MIN_SHOT - remaining
+                        if placed["dur_us"] - cut >= MIN_SHOT and _extend(placed, -cut):
+                            nxt = place(MIN_SHOT, avoid={placed["clip"].clip_id} | ({next_live} if next_live else set()))
+                            if nxt is not None:
+                                if nxt["clip"].clip_id not in {v["clip_id"] for v in own}:
+                                    report["fallback"].append((it["id"], nxt["clip"].clip_id))
+                                got.append(nxt)
+                                remaining = 0
+                            else:
+                                _extend(placed, cut)       # 放不进去：恢复原样，留给下一轮
+        if any(g["dur_us"] < MIN_SHOT for g in got):
+            report["warns"].append(f"{it['id']}：有个镜头不到 {MIN_SHOT / US:g}s（本句和相邻句的素材都凑不出更长的），"
+                                   "给这句多配一个画面，或在剪映里手动调")
         shots[k] = got
         prev_shot = got[-1]
 

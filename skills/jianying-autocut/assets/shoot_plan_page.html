@@ -201,7 +201,23 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   function render() {
     const a = document.activeElement;
     const keep = a && a.id && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) ? { id: a.id, s: a.selectionStart, e: a.selectionEnd } : null;
+    const old = app.querySelector && app.querySelector(".list");   // 测试用的极简 DOM 没有 querySelector
+    const listTop = old ? old.scrollTop : 0;
     app.innerHTML = header() + body();
+    // 整块重绘会把左侧清单滚回顶部：放回原位置；刚换了选中项、且它不在可视范围时，只滚清单把它带进来（不滚整页）。
+    // 其它重绘（数据库推送等）只恢复位置，用户自己滚开了就不拽回去
+    const list = app.querySelector && app.querySelector(".list");
+    const selChanged = S.sel !== S.lastSel;
+    S.lastSel = S.sel;
+    if (list) {
+      list.scrollTop = listTop;
+      const cur = selChanged && list.querySelector('[aria-current="true"]');
+      if (cur) {
+        const y = cur.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+        if (y < list.scrollTop || y + cur.offsetHeight > list.scrollTop + list.clientHeight)
+          list.scrollTop = Math.max(0, y - list.clientHeight / 3);
+      }
+    }
     for (const [id, v] of Object.entries(S.drafts)) {
       const m = id.match(/^note-(.+)$/);
       if (m && S.shots[m[1]] && (S.shots[m[1]].note || "") === v.trim()) { delete S.drafts[id]; continue; }   // 已经存上了

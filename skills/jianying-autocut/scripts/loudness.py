@@ -120,12 +120,16 @@ def bed_gain(clip_i, voice_target=VOICE_TARGET, below=BED_BELOW, cap=BED_CAP):
 
 
 def bgm_duck(levels, voice=VOICE_TARGET, margin=MARGIN, default=DEFAULT_DUCK):
-    """levels：[(该首歌的基础增益 dB, 人声期间该歌的最大短时响度)]。返回全片统一的压低比例。"""
-    need = [10 ** ((voice - margin - s_max - base_db) / 20) for base_db, s_max in levels]
+    """levels：[(该首歌的基础增益 dB, 人声期间该歌的最大短时响度[, 这段人声的实际响度])]，
+    不给人声响度就按 voice 算。返回全片统一的压低比例（取最严格的一段）。"""
+    need = [10 ** (((lv[2] if len(lv) > 2 else voice) - margin - lv[1] - lv[0]) / 20) for lv in levels]
     return min([default] + need)
 
 
-def margin_warnings(speech_spans, bgm_level, voice_levels, margin=MARGIN):
+BGM_HINT = "把这首歌的 --bgm 音量整体调低"
+
+
+def margin_warnings(speech_spans, bgm_level, voice_levels, margin=MARGIN, hint=BGM_HINT):
     """speech_spans：[(成片起点 us, 时长 us)]；bgm_level(a_us, b_us)：该区间 BGM 实际最大短时响度（无 BGM 为 None）；
     voice_levels：每句人声的实际响度。返回不达标的句子说明。"""
     out = []
@@ -135,7 +139,7 @@ def margin_warnings(speech_spans, bgm_level, voice_levels, margin=MARGIN):
             continue
         diff = round(v - b, 1)
         if diff < margin:
-            out.append(f"{_fmt(t)} 人声只比 BGM 高 {diff} LU（要 ≥{margin:g}）：把这首歌的 --bgm 音量整体调低")
+            out.append(f"{_fmt(t)} 人声只比 BGM 高 {diff} LU（要 ≥{margin:g}）：{hint}")
     return out
 
 
