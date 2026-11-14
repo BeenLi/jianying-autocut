@@ -194,7 +194,9 @@ def _print_report(shoot_plan, story, report, durations, out_path):
     for sid, length, longest in report["long_talk"]:
         print(f"⚠ 口播 {sid} 整句 {length:g}s，超过本章节奏最长镜头 {longest}s，会被剪断：把这章 rhythm 改成 slow，或在页面上缩短口播")
     used = {c for ch in story["chapters"] for c in ch["clip_ids"]}
-    print(f"未被任何章引用的素材 {len(set(durations) - used)} 段（不进成片）")
+    unused = sorted(set(durations) - used)
+    if unused:
+        print(f"未被任何章引用的素材 {len(unused)} 段：{'、'.join(unused)}（不进成片）")
     print(f"→ {out_path}")
 
 

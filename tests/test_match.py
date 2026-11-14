@@ -151,7 +151,7 @@ def test_main_writes_story_plan(tmp_path, capsys):
     with open(tmp_path / "story_plan.json", encoding="utf-8") as f:
         assert [c["id"] for c in json.load(f)["chapters"]] == ["ch2"]
     out = capsys.readouterr().out
-    assert "S01" in out and "ch1" in out and "未被任何章引用的素材 4 段" in out
+    assert "S01" in out and "ch1" in out and "未被任何章引用的素材 4 段：c001、c003、c004、c005" in out   # 问题 2：说出是哪几段
 
 
 def test_main_refuses_when_nothing_confirmed(tmp_path):    # Review Focus 2
