@@ -249,18 +249,28 @@ def talk_voice_levels(cache, subs, shots):
     return out
 
 
-def bgm_level_fn(plans, duck):
-    """(a_us, b_us) → 这段时间里 BGM 的实际最大短时响度（已含增益和压低）；没有 BGM 返回 None。"""
+def bgm_level_fn(plans, duck, drops=(), ups=()):
+    """(a_us, b_us) → 这段时间里 BGM 的实际最大短时响度（已含增益和压低）；没有 BGM 返回 None。
+    drops：[(起, 长)] BGM 淡出到 0 的区间（不算）；ups：[(起, 长)] BGM 不压低的区间。"""
+    drop = [(x, x + d) for x, d in drops]
+    up = [(x, x + d) for x, d in ups]
+
     def f(a, b):
+        cuts = sorted({a, b} | {x for lo, hi in drop + up for x in (lo, hi) if a < x < b})
         best = None
-        for segs, base, m in plans:
-            for t0, s0, d in segs:
-                lo, hi = max(a, t0), min(b, t0 + d)
-                if hi > lo:
-                    v = loudness.max_short(m["short"], (s0 + lo - t0) / US, (s0 + hi - t0) / US)
-                    if v is not None:
-                        v += loudness.db(base * duck)
-                        best = v if best is None else max(best, v)
+        for p0, p1 in zip(cuts, cuts[1:]):
+            mid = (p0 + p1) / 2
+            if any(lo <= mid < hi for lo, hi in drop):
+                continue
+            g = 1.0 if any(lo <= mid < hi for lo, hi in up) else duck
+            for segs, base, m in plans:
+                for t0, s0, d in segs:
+                    lo, hi = max(p0, t0), min(p1, t0 + d)
+                    if hi > lo:
+                        v = loudness.max_short(m["short"], (s0 + lo - t0) / US, (s0 + hi - t0) / US)
+                        if v is not None:
+                            v += loudness.db(base * g)
+                            best = v if best is None else max(best, v)
         return best
     return f
 
@@ -594,7 +604,8 @@ def main():
                     seg.add_keyframe(off, v)
                 script.add_segment(seg, bgm_track)
                 bgm_count += 1
-        mix_notes += loudness.margin_warnings(speech, bgm_level_fn(plans, duck_ratio), [voice_of(t) for t, _ in speech])
+        mix_notes += loudness.margin_warnings(speech, bgm_level_fn(plans, duck_ratio, drops, ups),
+                                             [voice_of(t) for t, _ in speech])
         mix_notes.insert(0, f"BGM 全片压低到 {duck_ratio:.0%}（只在长空隙 / bgm: up 处升起）")
     elif bgms:
         bgm_track = script.append_track(TrackSpec(TrackType.audio, "BGM"))

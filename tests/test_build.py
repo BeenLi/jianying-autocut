@@ -152,3 +152,12 @@ def test_bgm_mix_ducks_by_actual_voice_and_ignores_drops():      # 问题 13
     assert abs(20 * math.log10(duck) - (-26 - 12 + 20)) < 1e-6  # 按实际人声 -26 算：-18 dB
     _, duck = bgm_mix(_FakeCache(), bgms, [song], 10 * US, speech, voice_of=lambda t: -26.0, skip=[(0, 5 * US)])
     assert duck == 0.25                                          # 第一句在 drop 里（BGM 已淡出），不参与
+
+
+def test_bgm_level_respects_drops_and_ups():                     # 问题 14：drop 里 BGM 已淡出，不该报音量差
+    from build import bgm_level_fn
+    plans = [([(0, 0, 20 * US)], 1.0, {"short": [(t / 10, -20.0) for t in range(200)]})]
+    f = bgm_level_fn(plans, 0.25, drops=[(5 * US, 5 * US)], ups=[(12 * US, 3 * US)])
+    assert f(6 * US, 8 * US) is None                             # 整句在 drop 里：没有 BGM
+    assert abs(f(1 * US, 2 * US) - (-20 + 20 * math.log10(0.25))) < 1e-6   # 平时：压低档
+    assert abs(f(12.5 * US, 13 * US) - (-20.0)) < 1e-6           # up：不压低
