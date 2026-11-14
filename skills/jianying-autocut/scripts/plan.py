@@ -23,7 +23,7 @@
   静音   入点 1.5s 内有静音段就把镜头整体挪过去，少切在半句话上（不再判断有没有人说话）
   交替   章节带 intercut 时做平行蒙太奇：两条线（a / b）轮流出镜头，各线内按拍摄时间，最后落在 end_on
   顺序   hook 章放最前（冷开场），其余按 story_plan 顺序；章内大体按拍摄时间，
-         镜头最多挪 2 位来避免连续长镜头 / 三连短镜头
+         镜头最多挪 2 位来避免连续长镜头 / 三连短镜头；每章最后一个镜头不动
 所有时间内部都是整数微秒；挑不满的章节把差额外溢给有余量的章节，总长一微秒都不差。
 """
 import argparse
@@ -379,7 +379,7 @@ def _rhythm_bad(seq):
 
 
 def rhythm_reorder(shots, budget=20000):
-    """章内镜头已按拍摄时间排好：在每个镜头最多挪 MAX_SHIFT 位的前提下，消掉连续长镜头和三连短镜头。
+    """章内镜头已按拍摄时间排好：在每个镜头最多挪 MAX_SHIFT 位、最后一个镜头不动的前提下，消掉连续长镜头和三连短镜头。
     小范围回溯搜索，优先保持原顺序；搜不到可行解（或超出步数）就原样返回。"""
     n = len(shots)
     out, used, steps = [], [False] * n, [0]
@@ -392,6 +392,8 @@ def rhythm_reorder(shots, budget=20000):
             return False
         forced = [i for i in range(n) if not used[i] and i <= p - MAX_SHIFT]
         cands = forced or [i for i in range(max(0, p - MAX_SHIFT), min(n, p + MAX_SHIFT + 1)) if not used[i]]
+        # 最后一个镜头是这一章（往往也是全片）的落点：只放在最后，别的位置不选它
+        cands = [n - 1] if p == n - 1 else [i for i in cands if i != n - 1]
         for i in cands:
             out.append(shots[i])
             if not _rhythm_bad(out):

@@ -157,6 +157,15 @@ def test_rhythm_reorder_breaks_runs_with_small_moves():
     assert not any(a == b == c == "short" for a, b, c in zip(ks, ks[1:], ks[2:]))
 
 
+def test_rhythm_reorder_never_moves_the_last_shot():          # 问题 5：片尾 / 章尾镜头是故事的落点
+    from plan import rhythm_reorder
+    shots = [{"kind": k, "i": i} for i, k in enumerate(["short", "long", "long", "short"])]
+    assert rhythm_reorder(shots)[-1]["i"] == 3
+    shots = [{"kind": k, "i": i} for i, k in enumerate(["mid", "long", "long", "short", "long"])]
+    out = rhythm_reorder(shots)
+    assert out[-1]["i"] == 4 and not any(a["kind"] == b["kind"] == "long" for a, b in zip(out, out[1:]))
+
+
 def test_rhythm_reorder_keeps_good_order():
     from plan import rhythm_reorder
     shots = [{"kind": k, "i": i} for i, k in enumerate(["long", "short", "short", "mid", "long"])]
