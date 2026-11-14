@@ -133,3 +133,9 @@ def test_bgm_plan_mix_shapes_segments():                           # C3
     assert len(cache.calls) == 1
     assert [segs for segs, _, _ in plans] == [[(0, US, 5 * US)], [(5 * US, 9 * US, 5 * US)]]
     assert all(base == 0.3 for _, base, _ in plans)
+
+
+def test_margin_hint_points_to_bgm_plan_when_beat_synced():      # 问题 6：--bgm-plan 时 --bgm 会被拒绝
+    from build import margin_hint
+    assert "bgm_plan.json" in margin_hint(bgm_plan=[{"path": "x"}]) and "--bgm" not in margin_hint(bgm_plan=[{"path": "x"}])
+    assert "--bgm" in margin_hint(bgm_plan=None)

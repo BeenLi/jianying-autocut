@@ -125,7 +125,10 @@ def bgm_duck(levels, voice=VOICE_TARGET, margin=MARGIN, default=DEFAULT_DUCK):
     return min([default] + need)
 
 
-def margin_warnings(speech_spans, bgm_level, voice_levels, margin=MARGIN):
+BGM_HINT = "把这首歌的 --bgm 音量整体调低"
+
+
+def margin_warnings(speech_spans, bgm_level, voice_levels, margin=MARGIN, hint=BGM_HINT):
     """speech_spans：[(成片起点 us, 时长 us)]；bgm_level(a_us, b_us)：该区间 BGM 实际最大短时响度（无 BGM 为 None）；
     voice_levels：每句人声的实际响度。返回不达标的句子说明。"""
     out = []
@@ -135,7 +138,7 @@ def margin_warnings(speech_spans, bgm_level, voice_levels, margin=MARGIN):
             continue
         diff = round(v - b, 1)
         if diff < margin:
-            out.append(f"{_fmt(t)} 人声只比 BGM 高 {diff} LU（要 ≥{margin:g}）：把这首歌的 --bgm 音量整体调低")
+            out.append(f"{_fmt(t)} 人声只比 BGM 高 {diff} LU（要 ≥{margin:g}）：{hint}")
     return out
 
 

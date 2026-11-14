@@ -211,6 +211,11 @@ def bgm_mix(cache, bgms, songs, total, speech):
     return plans, loudness.bgm_duck(levels)
 
 
+def margin_hint(bgm_plan):
+    """人声 / BGM 音量差不够时怎么调：卡点 BGM 不接受 --bgm，要改 bgm_plan.json 里的 gain。"""
+    return "把 bgm_plan.json 里这首歌的 gain 调低（如 0.2 → 0.1）" if bgm_plan else loudness.BGM_HINT
+
+
 def bgm_plan_mix(cache, plan):
     """卡点 BGM（bgm_plan.json）→ 与 bgm_mix 相同的 [(segs, 基础增益, 实测)]，同一首歌只测一次。"""
     meas = {}
@@ -616,7 +621,7 @@ def main():
             cache = loudness.Cache(args.work)
             plans = bgm_plan_mix(cache, bgm_plan) if bgm_plan else bgm_mix(cache, bgms, songs, total, speech)[0]
             voice = talk_voice_levels(cache, subs, shots)
-            for w_ in loudness.margin_warnings(speech, bgm_level_fn(plans, DUCK), voice):
+            for w_ in loudness.margin_warnings(speech, bgm_level_fn(plans, DUCK), voice, hint=margin_hint(bgm_plan)):
                 sub_warns.append(w_)
         except (OSError, subprocess.SubprocessError, StopIteration):
             sub_warns.append("没测成响度（需要 ffmpeg），人声和 BGM 的音量差没有校验")
