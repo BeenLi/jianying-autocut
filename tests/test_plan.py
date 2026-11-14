@@ -381,3 +381,15 @@ def test_broken_story_plan_json_is_readable_error(tmp_path):      # A4
     with pytest.raises(SystemExit) as e:
         load_story(w)
     assert "story_plan.json" in str(e.value) and "第 2 行" in str(e.value)
+
+
+def test_second_pin_inside_first_shot_is_not_reported_as_dropped(capsys):   # 问题 4
+    import random
+    from plan import Clip, place_pins
+    row = {"clip_id": "c1", "path": "/x/c1.mp4", "name": "c1.mp4", "shot_time": "2026-10-05T00:00:00", "duration_s": 20}
+    c = Clip(row, [(t * US, 0.8, 0) for t in range(20)], [])
+    rhythm = [("long", 14, 14)]                        # 第一个 pin 的镜头 14s，会盖住第二个 pin
+    shots, _, _ = place_pins({"c1": c}, 60 * US, random.Random(1), [{"clip_id": "c1", "at": 8}, {"clip_id": "c1", "at": 12}], rhythm)
+    out = capsys.readouterr().out
+    assert len(shots) == 1 and shots[0]["in_us"] <= 12 * US < shots[0]["in_us"] + shots[0]["dur_us"]
+    assert "放不下" not in out and "已包含在" in out

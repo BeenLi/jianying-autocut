@@ -256,9 +256,15 @@ def place_pins(pool, quota, rng, pins, rhythm=RHYTHM):
             why = "素材不在本章可选范围" if c is None else "本章配额已用完（给章节加 share 或减少 pins）"
             print(f"  ⚠ pin {p['clip_id']}@{p['at']}s 没放进去：{why}")
             continue
-        w = place_pin(c, round(float(p["at"]) * US), d)
+        at = round(float(p["at"]) * US)
+        w = place_pin(c, at, d)
         if not w:
-            print(f"  ⚠ pin {p['clip_id']}@{p['at']}s 放不下（坏帧或已占用），跳过")
+            inside = next((s for s in shots if s["clip"] is c and s["in_us"] <= at < s["in_us"] + s["dur_us"]), None)
+            if inside:   # 这一刻已经在同素材前一个镜头里，不缺画面，不算丢
+                print(f"  · pin {p['clip_id']}@{p['at']}s 已包含在同素材的镜头 "
+                      f"{inside['in_us'] / US:.1f}–{(inside['in_us'] + inside['dur_us']) / US:.1f}s 里，不另起镜头")
+            else:
+                print(f"  ⚠ pin {p['clip_id']}@{p['at']}s 放不下（坏帧或已占用），跳过")
             continue
         k += 1
         a, d = w
