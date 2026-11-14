@@ -13,10 +13,16 @@
 | N3 | **你来配画面**：按句子内容和 `scene_notes` 给每个 `line` 写 `visuals`，需要原声的地方插 `live`，按故事需要标 `bgm` | 改好的 `narration_plan.json`（或页面上的 `nmatch`） |
 | N4 | 有页面时发给用户确认（见下），确认后导出成 `narration_plan.json` | — |
 | N5 | `narrate.py --work W --dry-run` 给用户看 → 去掉 `--dry-run` | `shots.csv`、`narration_track.json` |
-| N6 | 确认剪映已 ⌘Q 退出 → `build.py --work W --name <草稿名> --narration W/narration_track.json [--bgm 歌.mp3] [--titles] [--subs W/subtitles.json]` | 剪映草稿 + 自检 + 响度报告 |
+| N6 | 确认剪映已 ⌘Q 退出 → `build.py --work W --name <草稿名> --narration W/narration_track.json [--bgm 歌.mp3] [--subs W/subtitles.json]` | 剪映草稿 + 自检 + 响度报告 |
 
-`--script`：有旁白稿时（模式 A 页面的 `lines`），导出成 `[{"id": "L01", "text": "…"}]` 给它。转写会和稿子逐句对齐：
+旁白片默认不加 `--titles`：旁白和字幕已经交代了章节，章节标题文字反而多余（用户实测后要求去掉）。
+
+`--script`：有旁白稿时（模式 A 页面的 `lines`），按成片顺序导出要念的句子（不含 `kind: "live"`）：
+`[{"id": "L01", "text": "…", "chapter": "ch1", "chapter_title": "出发"}]`（`chapter` / `chapter_title` 可省）。转写会和稿子逐句对齐：
 同一句录了几遍取最后一遍，对不上稿子的句子（口误、闲聊）默认跳过，稿子里没录到的句子在初稿的 `missing_script` 里列出。
+对上的句子 `id`、`text`、`chapter` 都用稿子的（和页面一一对应）；转写和稿子差得多时 `note` 里留着转写原文，
+念的确实和稿子不一样就改 `text`（字幕用它）。稿外的句子 id 是 `X01` 起，章节跟前一句。
+念得流畅时 Whisper 常把一个文件转成一整段：这段对上连续几句稿子时，按各句字数比例在逐字时间里切开，切点落在附近的停顿上。
 没有稿子时按相似度找重录（后面 3 句之内相似度 ≥ 0.8 的，前一遍跳过），含"重来 / 不对 / 再来一遍"的短句也跳过；
 如果它前面那句是重说那句的开头（说了一半就停了，至少 4 个字），那句也一起跳过。Whisper 把"重来，〈重说的整句〉"
 合成了一句时，只去掉开头的"重来"、保留后面的话（有逐字时间就自动把 `start` 挪过去，没有就在 `note` 里提醒你手动改）。

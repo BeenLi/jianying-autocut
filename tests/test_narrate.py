@@ -584,3 +584,40 @@ def test_last_piece_leaves_no_sliver_and_borrowed_visual_ignores_its_at():
     assert all(r["dur_us"] >= us(2.0) for r in rows)
     a_shots = next(i for i in report["items"] if i["item"] == "A")["shots"]
     assert [s[0] for s in a_shots] == ["c1", "c3"]
+
+
+# ---------- 端到端发现：有稿子时的初稿（问题 7–10） ----------
+
+def _words(text, t0, gaps=None, step=0.2):
+    """逐字时间：每个字 step 秒；gaps={字下标: 额外停顿秒}（加在这个字之前）。"""
+    out, t = [], t0
+    for k, ch in enumerate(text):
+        t += (gaps or {}).get(k, 0)
+        out.append({"start": round(t, 3), "end": round(t + step, 3), "word": ch})
+        t += step
+    return out
+
+
+def test_draft_with_script_splits_fluent_file_and_uses_script_ids_text_chapters():
+    heard = "这是我到枸杞岛的第一个半晚可就在几个小时前我还以为这趟旅行要泡汤了"   # 一整段，同音错字「半晚」
+    w = _words(heard, 0.5, gaps={13: 0.6})                                      # 两句之间停 0.6s
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 20.0}, "silences": {},
+              "lines": {"n1": [{"start": w[0]["start"], "end": w[-1]["end"], "text": heard, "words": w}]}}
+    script = [{"id": "L02", "text": "这是我到枸杞岛的第一个傍晚。", "chapter": "ch1", "chapter_title": "想多住几天"},
+              {"id": "L03", "text": "可就在几个小时前，我还以为这趟旅行要泡汤了。", "chapter": "ch1"}]
+    plan = draft_plan(speech, script)
+    items = plan["items"]
+    assert [i["id"] for i in items] == ["L02", "L03"]                                   # 问题 9：用稿子的 id
+    assert [i["text"] for i in items] == [s["text"] for s in script]                   # 问题 8：用稿子的字
+    assert all(i["chapter"] == "ch1" for i in items) and plan["chapters"] == [{"id": "ch1", "title": "想多住几天"}]
+    assert items[0]["end"] == w[12]["end"] and items[1]["start"] == w[13]["start"]     # 问题 7：切在停顿上
+
+
+def test_draft_with_script_offscript_keeps_previous_chapter_and_unique_id():
+    speech = {"files": {"n1": "/v/a.m4a"}, "durations": {"n1": 20.0}, "silences": {},
+              "lines": {"n1": [{"start": 0.5, "end": 2.0, "text": "山顶的风特别大"},
+                               {"start": 3.0, "end": 4.0, "text": "哎这个录上了吗"}]}}
+    script = [{"id": "B", "text": "山顶的风特别大。", "chapter": "c2"}]
+    items = draft_plan(speech, script)["items"]
+    assert items[0]["id"] == "B" and items[1]["chapter"] == "c2" and items[1]["skip"]
+    assert items[1]["id"] not in {"B"} and len({i["id"] for i in items}) == 2

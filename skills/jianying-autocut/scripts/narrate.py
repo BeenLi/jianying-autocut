@@ -209,6 +209,80 @@ def align_to_script(lines, script):
     return out, [s["id"] for s in script if s["id"] not in last]
 
 
+MULTI_GAIN = 0.15        # 一段转写对上连续几句稿子，比对上最像的单句至少好这么多，才按稿子切开
+MULTI_MAX = 8            # 一段转写最多按几句稿子切
+SAME_TEXT = 0.9          # 念的和稿子相似度低于它，在 note 里留下实际念的内容
+
+
+def _split_by_script(lines, script):
+    """流畅朗读时 Whisper 会把一个文件转成一整段：这段如果对上连续几句稿子，就按各句字数比例
+    在逐字时间里切开，切点吸附到附近（±2 个字）停顿最长的地方。没有逐字时间的不切。"""
+    out = []
+    for l in lines:
+        ws = l.get("words") or []
+        lens = [len(_norm(w["word"])) for w in ws]
+        best1 = max((_ratio(l["text"], x["text"]) for x in script), default=0)
+        run = None
+        if sum(lens) >= 4:
+            for i in range(len(script)):
+                for j in range(i + 2, min(len(script), i + MULTI_MAX) + 1):
+                    r = _ratio(l["text"], "".join(x["text"] for x in script[i:j]))
+                    if r >= SCRIPT_RATIO and r > best1 + MULTI_GAIN and (run is None or r > run[0]):
+                        run = (r, i, j)
+        if run is None:
+            out.append(l)
+            continue
+        parts = script[run[1]:run[2]]
+        slen = [max(1, len(_norm(x["text"]))) for x in parts]
+        cum = [sum(lens[:k + 1]) for k in range(len(ws))]
+        cuts, acc = [], 0
+        for n in slen[:-1]:
+            acc += n
+            target = acc / sum(slen) * cum[-1]
+            k0 = min(range(len(ws) - 1), key=lambda k: abs(cum[k] - target))
+            near = [k for k in range(max(0, k0 - 2), min(len(ws) - 1, k0 + 3)) if not cuts or k > cuts[-1]]
+            if not near:
+                break
+            cuts.append(max(near, key=lambda k: (ws[k + 1]["start"] - ws[k]["end"]) - 0.02 * abs(cum[k] - target)))
+        a = 0
+        for c in cuts + [len(ws) - 1]:
+            piece = ws[a:c + 1]
+            out.append(dict(l, start=piece[0]["start"], end=piece[-1]["end"],
+                            text="".join(w["word"] for w in piece), words=piece))
+            a = c + 1
+    return out
+
+
+def _apply_script(lines, script):
+    """对上稿子的句子：id、文字、章节都用稿子的（页面导出时就能一一对应）；稿外的句子沿用前一句的章节，
+    另编 X 开头的 id。返回 (lines, chapters)。"""
+    meta = {x["id"]: x for x in script}
+    first_ch = next((x["chapter"] for x in script if x.get("chapter")), "ch1")
+    cur, titles, order, extra, takes = first_ch, {}, [], 0, {}
+    for l in lines:
+        sid = l.pop("script_id", None)
+        if sid is not None:
+            x = meta[sid]
+            cur = x.get("chapter") or cur
+            if x.get("chapter_title") and cur not in titles:
+                titles[cur] = x["chapter_title"]
+            if l.get("skip"):                     # 被替掉的那几遍：留着可恢复，id 加后缀
+                takes[sid] = takes.get(sid, 0) + 1
+                l["id"] = f"{sid}-{takes[sid]}"
+            else:
+                l["id"] = sid
+                if _ratio(l["text"], x["text"]) < SAME_TEXT:
+                    l["note"] = f"转写和稿子差得较多（可能是同音字，也可能念得不一样）：{l['text']}。字幕用稿子，念的不一样就改 text"
+                l["text"] = x["text"]
+        else:
+            extra += 1
+            l["id"] = f"X{extra:02d}"
+        l["chapter"] = cur
+        if cur not in order:
+            order.append(cur)
+    return lines, [{"id": c, "title": titles.get(c, c)} for c in order]
+
+
 def draft_plan(speech, script=None):
     """narration_speech.json → narration_plan.json 初稿（visuals 留空，等 Claude 配画面）。"""
     lines = []
@@ -216,15 +290,18 @@ def draft_plan(speech, script=None):
         for l in speech["lines"].get(fid, []):
             lines.append({"type": "line", "chapter": "ch1", "file": fid, "start": l["start"], "end": l["end"],
                           "text": l["text"], "visuals": [], "words": l.get("words", [])})
-    missing = []
+    missing, chapters = [], [{"id": "ch1", "title": "旁白"}]
     if script:
-        lines, missing = align_to_script(lines, script)
+        lines, missing = align_to_script(_split_by_script(lines, script), script)
+        lines, chapters = _apply_script(lines, script)
     else:
         lines = mark_retakes(lines)
+        for k, l in enumerate(lines, 1):
+            l["id"] = f"L{k:02d}"
     for l in lines:
         l.pop("words", None)            # 逐字时间只给找重录用，不进 plan
-    plan = {"files": dict(speech["files"]), "chapters": [{"id": "ch1", "title": "旁白"}],
-            "items": [{"id": f"L{k:02d}", **l} for k, l in enumerate(lines, 1)]}
+    plan = {"files": dict(speech["files"]), "chapters": chapters,
+            "items": [{"id": l.pop("id"), **l} for l in lines]}
     if missing:
         plan["missing_script"] = missing
     return plan
