@@ -1,3 +1,4 @@
+import math
 from build import bgm_segments, duck_keyframes, parse_bgm, place_subs
 from common import US
 
@@ -139,3 +140,15 @@ def test_margin_hint_points_to_bgm_plan_when_beat_synced():      # 问题 6：--
     from build import margin_hint
     assert "bgm_plan.json" in margin_hint(bgm_plan=[{"path": "x"}]) and "--bgm" not in margin_hint(bgm_plan=[{"path": "x"}])
     assert "--bgm" in margin_hint(bgm_plan=None)
+
+
+def test_bgm_mix_ducks_by_actual_voice_and_ignores_drops():      # 问题 13
+    from types import SimpleNamespace
+    from build import bgm_mix
+    song = SimpleNamespace(duration=20 * US)
+    bgms = [{"path": "/s.mp3", "gain": 1.0, "fade": 1.0}]
+    speech = [(1 * US, 2 * US), (6 * US, 2 * US)]                # 第一句时歌 -20，第二句时 -40
+    _, duck = bgm_mix(_FakeCache(), bgms, [song], 10 * US, speech, voice_of=lambda t: -26.0)
+    assert abs(20 * math.log10(duck) - (-26 - 12 + 20)) < 1e-6  # 按实际人声 -26 算：-18 dB
+    _, duck = bgm_mix(_FakeCache(), bgms, [song], 10 * US, speech, voice_of=lambda t: -26.0, skip=[(0, 5 * US)])
+    assert duck == 0.25                                          # 第一句在 drop 里（BGM 已淡出），不参与

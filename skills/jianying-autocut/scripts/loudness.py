@@ -120,8 +120,9 @@ def bed_gain(clip_i, voice_target=VOICE_TARGET, below=BED_BELOW, cap=BED_CAP):
 
 
 def bgm_duck(levels, voice=VOICE_TARGET, margin=MARGIN, default=DEFAULT_DUCK):
-    """levels：[(该首歌的基础增益 dB, 人声期间该歌的最大短时响度)]。返回全片统一的压低比例。"""
-    need = [10 ** ((voice - margin - s_max - base_db) / 20) for base_db, s_max in levels]
+    """levels：[(该首歌的基础增益 dB, 人声期间该歌的最大短时响度[, 这段人声的实际响度])]，
+    不给人声响度就按 voice 算。返回全片统一的压低比例（取最严格的一段）。"""
+    need = [10 ** (((lv[2] if len(lv) > 2 else voice) - margin - lv[1] - lv[0]) / 20) for lv in levels]
     return min([default] + need)
 
 

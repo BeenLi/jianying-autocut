@@ -184,8 +184,10 @@ def narration_mix(cache, narr, shots, inv, speech_json):
     return vo_gain, live_gain, bed, level, notes
 
 
-def bgm_mix(cache, bgms, songs, total, speech):
+def bgm_mix(cache, bgms, songs, total, speech, voice_of=None, skip=()):
     """每首歌按实测拉到同一响度（只衰减），再算全片统一的压低比例。
+    voice_of(t)：成片 t 处人声的实际响度（旁白提不到 -16 时 BGM 要压得更低；不给就按目标算）；
+    skip：[(起, 长)] BGM 本来就淡出的区间（bgm: drop），里面的人声不参与计算。
     返回 ([(歌内铺法 segs, 基础增益, 实测)], 压低比例)。"""
     meas = [cache.measure(b["path"]) for b in bgms]
     quiet = min(m["i"] for m in meas)
@@ -197,16 +199,18 @@ def bgm_mix(cache, bgms, songs, total, speech):
         start, end = total * cum[k] // cum[-1], total * cum[k + 1] // cum[-1]
         segs = bgm_segments(mat.duration, start, end)
         base = b["gain"] * min(1.0, 10 ** ((quiet - m["i"]) / 20))
-        s_max = None
-        for t0, s0, d in segs:
-            for a, dd in speech:
+        for a, dd in speech:
+            if any(x <= a and a + dd <= x + xd for x, xd in skip):
+                continue
+            s_max = None
+            for t0, s0, d in segs:
                 lo, hi = max(a, t0), min(a + dd, t0 + d)
                 if hi > lo:
                     v = loudness.max_short(m["short"], (s0 + lo - t0) / US, (s0 + hi - t0) / US)
                     if v is not None:
                         s_max = v if s_max is None else max(s_max, v)
-        if s_max is not None:
-            levels.append((loudness.db(base), s_max))
+            if s_max is not None:
+                levels.append((loudness.db(base), s_max) + ((voice_of(a),) if voice_of else ()))
         plans.append((segs, base, m))
     return plans, loudness.bgm_duck(levels)
 
@@ -561,12 +565,23 @@ def main():
     elif bgms and narr is not None:
         bgm_track = script.append_track(TrackSpec(TrackType.audio, "BGM"))
         songs = [jy.AudioMaterial(b["path"]) for b in bgms]
-        try:
-            plans, duck_ratio = bgm_mix(cache, bgms, songs, total, speech)
-        except (OSError, subprocess.SubprocessError) as e:
-            sys.exit(f"测 BGM 响度失败（需要 ffmpeg，或歌曲文件坏了）：{e}")
         ups = [(x["start_us"], x["dur_us"]) for x in narr["bgm"] if x["mode"] == "up"]
         drops = [(x["start_us"], x["dur_us"]) for x in narr["bgm"] if x["mode"] == "drop"]
+        live_at = [(x["start_us"], x["start_us"] + x["dur_us"], x["clip_id"]) for x in narr["live"]]
+        audio_at = [(x["start_us"], x["start_us"] + x["dur_us"], x["file"]) for x in narr["audio"]]
+
+        def voice_of(t):
+            for a, b_, cid in live_at:
+                if a <= t < b_:
+                    return voice_level["live:" + cid]
+            for a, b_, p in audio_at:
+                if a <= t < b_:
+                    return voice_level[p]
+            return loudness.VOICE_TARGET
+        try:   # 压低比例按每段人声实际提到的响度算（提不到 -16 的旁白，BGM 要压得更低）
+            plans, duck_ratio = bgm_mix(cache, bgms, songs, total, speech, voice_of=voice_of, skip=drops)
+        except (OSError, subprocess.SubprocessError) as e:
+            sys.exit(f"测 BGM 响度失败（需要 ffmpeg，或歌曲文件坏了）：{e}")
         for b, mat, (segs, base, _) in zip(bgms, songs, plans):
             fade = round(b["fade"] * US)
             for i, (t0, s0, d) in enumerate(segs):
@@ -579,17 +594,6 @@ def main():
                     seg.add_keyframe(off, v)
                 script.add_segment(seg, bgm_track)
                 bgm_count += 1
-        live_at = [(x["start_us"], x["start_us"] + x["dur_us"], x["clip_id"]) for x in narr["live"]]
-        audio_at = [(x["start_us"], x["start_us"] + x["dur_us"], x["file"]) for x in narr["audio"]]
-
-        def voice_of(t):
-            for a, b_, cid in live_at:
-                if a <= t < b_:
-                    return voice_level["live:" + cid]
-            for a, b_, p in audio_at:
-                if a <= t < b_:
-                    return voice_level[p]
-            return loudness.VOICE_TARGET
         mix_notes += loudness.margin_warnings(speech, bgm_level_fn(plans, duck_ratio), [voice_of(t) for t, _ in speech])
         mix_notes.insert(0, f"BGM 全片压低到 {duck_ratio:.0%}（只在长空隙 / bgm: up 处升起）")
     elif bgms:
