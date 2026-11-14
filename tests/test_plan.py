@@ -404,3 +404,25 @@ def test_talk_pin_cover_keeps_whole_sentence(capsys):            # 问题 3：�
                              [{"clip_id": "c1", "at": 7.4, "cover": [0.94, 13.94]}], [("long", 12.0, 12.9)])
     a, d = shots[0]["in_us"], shots[0]["dur_us"]
     assert a <= round(0.94 * US) and a + d >= round(13.94 * US)
+
+
+def _cover_case(bad, cover, capsys):
+    import random
+    from plan import Clip, place_pins
+    row = {"clip_id": "c1", "path": "/x/c1.mp4", "name": "c1.mp4", "shot_time": "2026-10-05T00:00:00", "duration_s": 30}
+    c = Clip(row, [(t * US, 0.8, int(t in bad)) for t in range(31)], [])
+    shots, _, _ = place_pins({"c1": c}, 60 * US, random.Random(1), [{"clip_id": "c1", "at": 8.0, "cover": cover}], [("long", 10.0, 10.0)])
+    a, d = shots[0]["in_us"], shots[0]["dur_us"]
+    return a <= round(cover[0] * US) and a + d >= round(cover[1] * US), capsys.readouterr().out
+
+
+def test_cover_finds_window_off_center_when_center_has_bad_frame(capsys):   # I2
+    covers, out = _cover_case((4,), [5.0, 11.0], capsys)
+    assert covers and "剪断" not in out
+
+
+def test_cover_warns_whenever_sentence_cannot_be_covered(capsys):            # I2：别静默剪断
+    covers, out = _cover_case((6,), [5.0, 11.0], capsys)                       # 句内坏帧
+    assert not covers and "剪断" in out
+    covers, out = _cover_case((), [0.2, 6.0], capsys)                          # 句首在素材首 0.5s 内
+    assert not covers and "剪断" in out

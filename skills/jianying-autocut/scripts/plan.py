@@ -262,11 +262,15 @@ def place_pins(pool, quota, rng, pins, rhythm=RHYTHM):
             s0, e0 = (round(float(x) * US) for x in p["cover"])
             need = e0 - s0
             d = max(d, min(need, c.longest_free(), remaining))
-            a = min(max(s0 - (d - need) // 2, EDGE), c.dur - EDGE - d)
-            if a <= s0 and a + d >= e0 and c.feasible(a, d):
-                w = (a, d)
-            elif d < need:
-                print(f"  ⚠ 口播 {p['clip_id']}@{p['at']}s 整句 {need / US:.1f}s，只放得下 {d / US:.1f}s，句子会被剪断")
+            lo, hi = max(EDGE, e0 - d), min(s0, c.dur - EDGE - d)      # 能盖住整句的入点范围
+            mid = s0 - (d - need) // 2
+            starts = sorted({lo, hi, min(max(mid, lo), hi)} | set(range(lo, hi + 1, STEP)), key=lambda x: abs(x - mid))
+            w = next(((x, d) for x in starts if lo <= hi and c.feasible(x, d)), None)
+            if w is None:
+                why = (f"只放得下 {d / US:.1f}s" if d < need else
+                       "句子贴着素材开头 / 结尾（首尾 0.5s 不取）" if s0 < EDGE or e0 > c.dur - EDGE else
+                       "句子范围里有坏帧或已被占用")
+                print(f"  ⚠ 口播 {p['clip_id']}@{p['at']}s 整句 {need / US:.1f}s：{why}，句子会被剪断")
         w = w or place_pin(c, at, d)
         if not w:
             inside = next((s for s in shots if s["clip"] is c and s["in_us"] <= at < s["in_us"] + s["dur_us"]), None)
