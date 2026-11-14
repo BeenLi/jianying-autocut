@@ -257,7 +257,17 @@ def place_pins(pool, quota, rng, pins, rhythm=RHYTHM):
             print(f"  ⚠ pin {p['clip_id']}@{p['at']}s 没放进去：{why}")
             continue
         at = round(float(p["at"]) * US)
-        w = place_pin(c, at, d)
+        w = None
+        if p.get("cover"):   # 口播：镜头至少盖住整句（节奏抽到的长度不够就加长），整句居中
+            s0, e0 = (round(float(x) * US) for x in p["cover"])
+            need = e0 - s0
+            d = max(d, min(need, c.longest_free(), remaining))
+            a = min(max(s0 - (d - need) // 2, EDGE), c.dur - EDGE - d)
+            if a <= s0 and a + d >= e0 and c.feasible(a, d):
+                w = (a, d)
+            elif d < need:
+                print(f"  ⚠ 口播 {p['clip_id']}@{p['at']}s 整句 {need / US:.1f}s，只放得下 {d / US:.1f}s，句子会被剪断")
+        w = w or place_pin(c, at, d)
         if not w:
             inside = next((s for s in shots if s["clip"] is c and s["in_us"] <= at < s["in_us"] + s["dur_us"]), None)
             if inside:   # 这一刻已经在同素材前一个镜头里，不缺画面，不算丢

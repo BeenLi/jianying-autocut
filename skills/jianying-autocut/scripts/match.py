@@ -136,23 +136,24 @@ def build_story_plan(shoot_plan, matches):
                 continue
             if s["id"] in confirmed:
                 m = confirmed[s["id"]]
-                wanted.append((m["clip_id"], to_seconds(m["at"])))
-                # pin 只带一个时间点，镜头长度由节奏决定：整句比本章最长镜头还长，必然被剪断
                 start, end = to_seconds(m.get("start")), to_seconds(m.get("end"))
+                # 口播的整句范围随 pin 传给 plan.py（cover），镜头至少盖住它；整句比本章最长镜头还长时仍会被剪断
+                cover = [start, end] if start is not None and end is not None and end > start else None
+                wanted.append((m["clip_id"], to_seconds(m["at"]), cover))
                 longest = max(hi for _, _, hi in RHYTHMS[ch.get("rhythm") or FUNCTION_RHYTHM[ch["function"]]])
                 if start is not None and end is not None and end - start > longest:
                     report["long_talk"].append((s["id"], round(end - start, 1), longest))
             else:
                 report["missing"].setdefault(ch["id"], []).append(s["id"])
-        wanted += [(cid, to_seconds(x["at"])) for cid, x in extras.items()
+        wanted += [(cid, to_seconds(x["at"]), None) for cid, x in extras.items()
                    if x.get("chapter") == ch["id"] and x.get("accepted") is True]
         pins = []
-        for cid, at in wanted:
+        for cid, at, cover in wanted:
             near = next((p for p in pins if p["clip_id"] == cid and abs(p["at"] - at) < MERGE_S), None)
             if near:
                 report["merged_pins"].append((cid, near["at"], at))
             else:
-                pins.append({"clip_id": cid, "at": at})
+                pins.append({"clip_id": cid, "at": at, **({"cover": cover} if cover else {})})
         if not pins:
             report["dropped_chapters"].append(ch["id"])
             continue

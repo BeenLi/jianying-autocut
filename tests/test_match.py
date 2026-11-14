@@ -100,6 +100,14 @@ def test_build_maps_confirmed_matches_to_pins():
     assert story["director_intent"] == sp["meta"]["intent"] and rep["missing"] == {}
 
 
+def test_talk_pin_carries_sentence_cover():                    # 问题 3：整句起止传给 plan.py
+    sp, m, _ = _inputs()
+    story, _ = build_story_plan(sp, m)
+    pins = story["chapters"][1]["pins"]
+    assert {"clip_id": "c002", "at": 80.0, "cover": [78.0, 83.0]} in pins
+    assert all("cover" not in p for p in pins if p["at"] == 15.0)
+
+
 def test_chapters_follow_order_field():
     sp, m, _ = _inputs()
     sp["chapters"][0]["order"], sp["chapters"][1]["order"] = 2, 1

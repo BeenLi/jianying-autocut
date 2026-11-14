@@ -393,3 +393,14 @@ def test_second_pin_inside_first_shot_is_not_reported_as_dropped(capsys):   # �
     out = capsys.readouterr().out
     assert len(shots) == 1 and shots[0]["in_us"] <= 12 * US < shots[0]["in_us"] + shots[0]["dur_us"]
     assert "放不下" not in out and "已包含在" in out
+
+
+def test_talk_pin_cover_keeps_whole_sentence(capsys):            # 问题 3：节奏抽到的长镜头比整句短也不能剪断
+    import random
+    from plan import Clip, place_pins
+    row = {"clip_id": "c1", "path": "/x/c1.mp4", "name": "c1.mp4", "shot_time": "2026-10-05T00:00:00", "duration_s": 15.2}
+    c = Clip(row, [(t * US, 0.8, 0) for t in range(16)], [])
+    shots, _, _ = place_pins({"c1": c}, 60 * US, random.Random(1),
+                             [{"clip_id": "c1", "at": 7.4, "cover": [0.94, 13.94]}], [("long", 12.0, 12.9)])
+    a, d = shots[0]["in_us"], shots[0]["dur_us"]
+    assert a <= round(0.94 * US) and a + d >= round(13.94 * US)
