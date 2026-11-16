@@ -123,11 +123,24 @@ def _narration(tmp_path, work, live=True, bgm_marks=()):
     return vo
 
 
-def _fake_measure(monkeypatch, levels):
+def _fake_measure(monkeypatch, levels, norm_fail=None):
+    """假测量 + 假归一化：副本 <名>.wav 的响度默认 -16 / -1.6（levels 里可单独给）。"""
+    import normalize
+    levels = {"vo.wav": (-16.0, -1.6), **levels}
+
     def m(path, start=None, end=None):
         i, tp = levels[os.path.basename(path)]
         return {"i": i, "tp": tp, "short": [(t / 10, i if t % 10 else i - 25) for t in range(0, 600)]}
+
+    def norm(path, out_dir, cache, short_s=3.0, name=None):
+        if norm_fail:
+            raise norm_fail
+        os.makedirs(out_dir, exist_ok=True)
+        out = os.path.join(out_dir, (name or os.path.splitext(os.path.basename(path))[0]) + ".wav")
+        open(out, "wb").write(b"0")
+        return out, {"type": "dynamic", "short": False}
     monkeypatch.setattr(loudness, "measure", m)
+    monkeypatch.setattr(normalize, "normalize", norm)
 
 
 def _segs(d, name):
@@ -142,8 +155,10 @@ def test_build_main_narration(tmp_path, monkeypatch, capsys):
          "--narration", str(work / "narration_track.json"))
     d = json.load(open(drafts / "旁白片" / "draft_info.json"))
     vo = _segs(d, "旁白")
-    assert len(vo) == 1 and abs(vo[0]["volume"] - 10 ** (6 / 20)) < 1e-6
+    assert len(vo) == 1 and vo[0]["volume"] == 1.0          # 副本已归一化到 -16 LUFS，剪映里不再放大
     assert vo[0]["target_timerange"] == {"start": 700000, "duration": 4000000}
+    mat = next(a for a in d["materials"]["audios"] if a["id"] == vo[0]["material_id"])
+    assert mat["path"] == str(work / "旁白_归一化" / "vo.wav") and mat["duration"] == 30000000
     video = [t for t in d["tracks"] if t["type"] == "video"][0]["segments"]
     assert abs(video[0]["volume"] - loudness.bed_gain(-30.0)) < 1e-6
     assert abs(video[1]["volume"] - loudness.voice_gain(-30.0, -10.0)[0]) < 1e-6
@@ -151,6 +166,31 @@ def test_build_main_narration(tmp_path, monkeypatch, capsys):
     assert "出发" in texts
     out = capsys.readouterr().out
     assert "✓" in out and "待真机验证" in out
+    assert "vo.m4a -22.0 → -16.0 LUFS（限幅）" in out and str(work / "旁白_归一化") in out
+    boosted = next(l for l in out.splitlines() if "待真机验证" in l)
+    assert "vo.m4a" not in boosted and "c002" in boosted
+
+
+def test_narration_copy_short_of_target_reports_too_quiet(tmp_path, monkeypatch, capsys):
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    _fake_measure(monkeypatch, {"vo.m4a": (-30.0, -2.0), "vo.wav": (-25.7, -1.5), "a.mp4": (-30.0, -10.0)})
+    _run(monkeypatch, "--work", str(work), "--name", "短", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"))
+    out = capsys.readouterr().out
+    assert "太小声" in out and "9.7 dB" in out
+
+
+def test_narration_normalize_failure_exits(tmp_path, monkeypatch):           # Review Focus 3
+    import subprocess
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    for err in (subprocess.CalledProcessError(1, ["ffmpeg"]), FileNotFoundError("ffmpeg")):
+        _fake_measure(monkeypatch, {"vo.m4a": (-30.0, -2.0), "a.mp4": (-30.0, -10.0)}, norm_fail=err)
+        with pytest.raises(SystemExit, match="归一化失败.*vo.m4a"):
+            _run(monkeypatch, "--work", str(work), "--name", "坏", "--drafts-dir", str(drafts),
+                 "--narration", str(work / "narration_track.json"))
+        assert not (drafts / "坏").exists()
 
 
 def test_build_main_narration_without_bgm_or_live(tmp_path, monkeypatch):      # Review Focus 4

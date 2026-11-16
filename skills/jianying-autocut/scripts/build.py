@@ -15,8 +15,9 @@
   · 画面方向：orientation.json 判定整段倒装的素材，片段旋转 180°
   · 字幕：--subs 给出有意义的人声（{clip_id: [{start, end, text}]}，素材内秒），生成底部带底色的字幕；
     说话时 BGM 压到 25%，有字幕的镜头原声开到 100%
-  · 旁白片（--narration，narrate.py 的输出）：多一条「旁白」音轨；人声按来源归一化到 -16 LUFS（最多 +12dB、
-    真峰值 ≤ -1dBTP）；旁白下的原声垫底，原声段（live）按人声归一化；BGM 默认停在压低档、全片一个值，
+  · 旁白片（--narration，narrate.py 的输出）：多一条「旁白」音轨，引用 W/旁白_归一化/ 里两遍 loudnorm 的
+    WAV 副本（-16 LUFS、真峰值 ≤ -1.5dBTP，音量 1.0）；旁白下的原声垫底，原声段（live）按人声归一化
+    （最多 +12dB、真峰值 ≤ -1dBTP）；BGM 默认停在压低档、全片一个值，
     只在长空隙 / bgm: up 处升起，bgm: drop 处淡出；逐句校验人声比 BGM 高 ≥ 12 LU（只报告）
   · 写完重新读回来自检：零缝隙零重叠、时长精确、无悬空引用、素材零复制、版本号对齐、BGM 不越界
 只生成草稿，不导出成片——导出请在剪映里手动点。
@@ -36,6 +37,7 @@ import pyJianYingDraft as jy
 from pyJianYingDraft import Timerange, TrackSpec, TrackType
 
 import loudness
+import normalize
 from common import DRAFTS_DIR, US, detect_versions, jianying_running, load_json, read_csv
 
 TITLE_US = 3 * US
@@ -48,6 +50,8 @@ SPEECH_VOLUME = 1.0        # 有字幕的镜头原声音量
 NARR_TRACK = "旁白"
 RAMP_UP = int(0.8 * US)    # 旁白片：BGM 升起用的过渡（比压低慢，听着不突兀）
 LOUD_GAP = 4 * US          # 旁白片：没有人声的空隙至少这么长，BGM 才升起来
+NORM_DIR = "旁白_归一化"    # 旁白归一化副本放在 W 下的这个目录
+NORM_TOL = 0.7             # 副本比 -16 LUFS 还低这么多 dB 才提示「太小声」
 NOISE_MIN_DB = 15.0        # 原声段：人声比底噪高不到这么多 dB 就不提升（越提越吵）
 
 
@@ -155,17 +159,29 @@ def _muted(shot):
     return shot.get("kind") == "narr" and str(shot.get("mute") or "") in ("1", "True", "true")
 
 
-def narration_mix(cache, narr, shots, inv, speech_json):
-    """旁白片的音量：返回 (旁白文件增益 {path: g}, 原声段增益 {clip_id: g}, 垫底 {clip_id: g}, 人声电平 {key: LUFS}, 报告)。
-    人声电平的 key：旁白文件路径，或 "live:<clip_id>"。"""
-    notes, vo_gain, live_gain, bed, level = [], {}, {}, {}, {}
-    for path in sorted({a["file"] for a in narr["audio"]}):
-        m = cache.measure(path)
-        g, short = loudness.voice_gain(m["i"], m["tp"])
-        vo_gain[path], level[path] = g, m["i"] + loudness.db(g)
-        if short > 0.05:
-            notes.append(f"{os.path.basename(path)} 太小声，提到 +{loudness.db(g):.1f} dB 还差 {short:.1f} dB："
-                         "建议重录，或在剪映里降噪后再提")
+def narration_mix(cache, narr, shots, inv, speech_json, norm_dir):
+    """旁白片的音量：返回 (旁白文件增益 {path: g}, 原声段增益 {clip_id: g}, 垫底 {clip_id: g}, 人声电平 {key: LUFS}, 报告,
+    归一化副本 {原路径: 副本路径})。旁白先在 norm_dir 生成两遍 loudnorm 的 WAV 副本（剪映里引用副本，增益 1.0）；
+    人声电平的 key：旁白原文件路径（值是副本的实测响度），或 "live:<clip_id>"。
+    归一化失败（没有 ffmpeg、文件坏了）直接退出：悄悄引用原文件会让各段旁白响度又不一致。"""
+    notes, vo_gain, live_gain, bed, level, copies = [], {}, {}, {}, {}, {}
+    paths = sorted({a["file"] for a in narr["audio"]})
+    names = normalize.copy_names(paths)
+    for path in paths:
+        try:
+            copies[path], info = normalize.normalize(path, norm_dir, cache, name=names[path])
+            before, after = cache.measure(path)["i"], cache.measure(copies[path])["i"]
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            raise SystemExit(f"旁白归一化失败（需要 ffmpeg）：{os.path.basename(path)}：{e}")
+        vo_gain[path], level[path] = 1.0, after
+        notes.append(f"{os.path.basename(path)} {before:.1f} → {after:.1f} LUFS"
+                     f"（{'线性' if info['type'] == 'linear' else '限幅'}）")
+        short = loudness.VOICE_TARGET - after
+        if short > NORM_TOL:
+            notes.append(f"{os.path.basename(path)} 太小声，归一化后还差 {short:.1f} dB"
+                         f"{'（不到 3 秒，只能线性提升）' if info['short'] else ''}：建议重录，或在剪映里降噪后再提")
+    if paths:
+        notes.append(f"旁白用的是归一化副本（{norm_dir}），原文件没动；想要原来的动态，在剪映里把素材替换回原文件")
     by_cid = {r["clip_id"]: r for r in inv.values()}
     for lv in narr["live"]:
         cid = lv["clip_id"]
@@ -186,7 +202,7 @@ def narration_mix(cache, narr, shots, inv, speech_json):
         if s["kind"] == "narr" and cid not in bed and not _muted(s):   # 只在消音镜头里出现的素材不用测
             row = by_cid[cid]
             bed[cid] = loudness.bed_gain(cache.measure(row["path"])["i"]) if str(row.get("has_audio")) == "True" else 0.0
-    return vo_gain, live_gain, bed, level, notes
+    return vo_gain, live_gain, bed, level, notes, copies
 
 
 def bgm_mix(cache, bgms, songs, total, speech, voice_of=None, skip=()):
@@ -465,7 +481,8 @@ def main():
         speech_json = load_json(sp, default={}, kind=dict)
         cache = loudness.Cache(args.work)
         try:
-            vo_gain, live_gain, bed, voice_level, mix_notes = narration_mix(cache, narr, shots, inv, speech_json)
+            vo_gain, live_gain, bed, voice_level, mix_notes, vo_copy = narration_mix(
+                cache, narr, shots, inv, speech_json, os.path.join(args.work, NORM_DIR))
         except (OSError, subprocess.SubprocessError) as e:
             sys.exit(f"测响度失败（需要 ffmpeg）：{e}")
     if args.subs:
@@ -527,7 +544,7 @@ def main():
         for a in narr["audio"]:
             p = a["file"]
             if p not in vo_mats:
-                vo_mats[p] = injected_audio(p, vo_durs[p])
+                vo_mats[p] = injected_audio(vo_copy[p], vo_durs[p])   # 副本和原文件等长，时长沿用转写记录
             seg = jy.AudioSegment(vo_mats[p], Timerange(a["start_us"], a["dur_us"]),
                                   source_timerange=Timerange(a["src_us"], a["dur_us"]), volume=vo_gain[p])
             if a.get("fade_in_us") or a.get("fade_out_us"):
@@ -661,8 +678,7 @@ def main():
     print("  ✓ 零缝隙零重叠 ✓ 时长精确 ✓ 无悬空引用 ✓ 素材零复制 ✓ 版本号对齐" + (" ✓ BGM 铺满不越界" if bgm_count else ""))
     if narr is not None:
         print(f"  旁白 {narr_count} 段 / 原声段 {len(narr['live'])} 个 / 字幕 {len(subs)} 条")
-        boosted = [os.path.basename(p) for p, g in vo_gain.items() if g > 1] + \
-                  [c for c, g in live_gain.items() if g > 1]
+        boosted = [c for c, g in live_gain.items() if g > 1]   # 旁白已用归一化副本，只剩原声段可能放大
         if boosted:
             print(f"  ⚠ 音量放大（>100%）待真机验证剪映是否生效：{'、'.join(boosted)}")
         for n in mix_notes:
