@@ -632,8 +632,16 @@ def layout(plan, clips, speech, silences, file_durs, opts):
             if not vis:
                 report["unpaired"].append(it["id"])
             # 原声段的画面就是用户给的那段声音，不能延长（会把范围外的原声以人声音量带进旁白）
-            if prev_shot["kind"] != "live" and prev_shot["clip"].clip_id != next_live and _extend(prev_shot, L):
-                continue
+            if prev_shot["kind"] != "live" and prev_shot["clip"].clip_id != next_live:
+                if _extend(prev_shot, L):
+                    continue
+                # 素材只差不到 NUDGE_MAX 就到头（21.0s 的地图延续到 21.031s）：延长到头，零头挤给下一句
+                c = prev_shot["clip"]
+                short = prev_shot["in_us"] + prev_shot["dur_us"] + L - (c.dur - c.edge)
+                if 0 < short < NUDGE_MAX and k + 1 < len(sl) and not sl[k + 1]["live"] and _extend(prev_shot, L - short):
+                    s["end_us"] -= short
+                    sl[k + 1]["start_us"] -= short
+                    continue
         j = line_slots.index(k)
         # 借来的画面不带原句的 at：那一刻是原句自己要用的，借用只取素材里还空着的地方
         neighbours = [{"clip_id": v["clip_id"]} for jj in (j - 1, j + 1) if 0 <= jj < len(line_slots)

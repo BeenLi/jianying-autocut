@@ -802,3 +802,18 @@ def test_reuse_flag_shown_in_dry_run(tmp_path, capsys):
     (tmp_path / "narration_plan.json").write_text(json.dumps(p))
     assert main(["--work", w, "--dry-run"]) == 0
     assert "（重复用）" in capsys.readouterr().out
+
+
+def test_tiny_remainder_nudged_when_empty_lines_continue_graphic():
+    # 枸杞岛：L28 配 21.0s 的地图 g，L29、L30 留空延续；三句的槽合起来比 g 长 31ms，后面紧跟一句旁白
+    from plan import MIN_SHOT
+    items = [_line("L28", 1.0, 8.0, visuals=[{"clip_id": "g", "at": 0}]), _line("L29", 8.4, 15.0),
+             _line("L30", 15.4, 19.431), _line("B", 2.0, 8.0, file="n2", visuals=_vis("c2"))]
+    plan = _plan(*items)
+    sl = slots(timeline(plan, {}, {"n1": 60.0, "n2": 60.0}, Opts()), plan, Opts())
+    assert sl[3]["start_us"] == us(21.031)
+    rows, track, rep = _lay(items, _nudge_clips())
+    _rows_ok(rows, track["total_us"])
+    assert [(r["source"], r["dur_us"]) for r in rows[:1]] == [("/x/g.mp4", us(21.0))]
+    assert rows[1]["source"] == "/x/c2.mp4" and rows[1]["start_us"] == us(21.0)
+    assert all(r["dur_us"] >= MIN_SHOT for r in rows)
