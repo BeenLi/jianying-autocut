@@ -28,6 +28,7 @@
 """
 import argparse
 import os
+from contextlib import contextmanager
 import random
 import sys
 from collections import defaultdict
@@ -94,6 +95,8 @@ class Clip:
         self.frames = [] if graphic else sorted(frames)   # [(t_us, score, bad)]
         self.silences = silences            # [(s0_us, s1_us)]
         self.used = []                      # [(in_us, out_us)]
+        self.reuse_used = []                # 旁白片 reuse 画面的占用：只和彼此避让，不和 used 避让
+        self._unconstrained = False
         self.gap = GAP                      # 同素材两次取用的最小间隔（精简模式会放大，避免留下相邻的重复画面）
 
     @property
@@ -120,8 +123,22 @@ class Clip:
             return None if b else s
         return sum(s for s, _ in inside) / len(inside)
 
+    @property
+    def occupied(self):
+        """free / longest_free / best_window 避让的区间：平时是 used，unconstrained() 里换成 reuse_used。"""
+        return self.reuse_used if self._unconstrained else self.used
+
+    @contextmanager
+    def unconstrained(self):
+        """reuse 画面：在里面挑窗口时不管已被别的镜头占用的区间，只和其它 reuse 镜头避让。"""
+        prev, self._unconstrained = self._unconstrained, True
+        try:
+            yield self
+        finally:
+            self._unconstrained = prev
+
     def free(self, a, d):
-        return all(a + d + self.gap <= u0 or a >= u1 + self.gap for u0, u1 in self.used)
+        return all(a + d + self.gap <= u0 or a >= u1 + self.gap for u0, u1 in self.occupied)
 
     def feasible(self, a, d):
         return self.edge <= a <= self.dur - self.edge - d and self.free(a, d) and self.window_score(a, d) is not None
@@ -152,7 +169,7 @@ class Clip:
 
     def longest_free(self):
         segs, cur = [], self.edge
-        for u0, u1 in sorted(self.used):
+        for u0, u1 in sorted(self.occupied):
             segs.append(u0 - self.gap - cur)
             cur = u1 + self.gap
         segs.append(self.dur - self.edge - cur)

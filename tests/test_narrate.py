@@ -710,3 +710,69 @@ def test_no_nudge_before_live_or_at_end():               # Review Focus 2
         sl = slots(timeline(plan, {}, {"n1": 60.0, "n2": 60.0}, Opts()), plan, Opts())
         assert [(e["start_us"], e["end_us"]) for e in rep["items"]] == [(x["start_us"], x["end_us"]) for x in sl]
         assert all(r["dur_us"] >= MIN_SHOT for r in rows)
+
+
+# ---------- visuals.reuse ----------
+
+def _span(rep, iid):
+    return [s for e in rep["items"] if e["item"] == iid for s in e["shots"]]
+
+
+def test_reuse_visual_ignores_live_occupancy():
+    clips = _clips(("c022", 30), ("c2", 60))
+    items = [_line("L", 1.0, 4.0, visuals=[{"clip_id": "c022", "reuse": True}]), _live("V", "c022", 0.5, 29.5)]
+    rows, track, rep = _lay(items, clips, tail=0)
+    _rows_ok(rows, track["total_us"])
+    assert [s[0] for s in _span(rep, "L")] == ["c022"]
+    assert clips["c022"].used == [(us(0.5), us(29.5))]
+    _, a, d = _span(rep, "L")[0][:3]
+    assert (a, a + d) in clips["c022"].reuse_used
+
+
+def test_reuse_does_not_allow_adjacent_with_previous_shot():
+    items = [_line("A", 1.0, 4.0, visuals=_vis("c1")),
+             _line("B", 6.0, 9.0, visuals=[{"clip_id": "c1", "reuse": True}, {"clip_id": "c2"}])]
+    rows, track, rep = _lay(items, _clips(("c1", 60), ("c2", 60)))
+    assert _span(rep, "B")[0][0] != "c1"
+    srcs = [r["source"] for r in rows]
+    assert all(x != y for x, y in zip(srcs, srcs[1:]))
+
+
+def test_two_reuse_visuals_of_same_clip_do_not_overlap():
+    clips = _clips(("c1", 30), ("c2", 60))
+    items = [_line("L1", 1.0, 4.0, visuals=[{"clip_id": "c1", "reuse": True}]),
+             _line("L2", 6.0, 9.0, visuals=_vis("c2")),
+             _line("L3", 11.0, 14.0, visuals=[{"clip_id": "c1", "reuse": True}]),
+             _live("V", "c1", 0.5, 29.5)]
+    rows, track, rep = _lay(items, clips, tail=0)
+    _rows_ok(rows, track["total_us"])
+    (c_a, a, da), (c_b, b, db) = _span(rep, "L1")[0][:3], _span(rep, "L3")[0][:3]
+    assert c_a == c_b == "c1"
+    assert a + da <= b or b + db <= a
+    assert clips["c1"].used == [(us(0.5), us(29.5))]
+
+
+def test_remainder_merges_into_reuse_shot_without_error():
+    # L2 太短、没配画面：延长上一个镜头（L1 的 reuse 镜头）。c1 整段被最后的原声段 V0 占着
+    clips = _clips(("c1", 30), ("c2", 60), ("c3", 60))
+    items = [_line("L1", 1.0, 4.0, visuals=[{"clip_id": "c1", "reuse": True}]), _line("L2", 4.4, 5.0),
+             _live("V", "c2", 10.0, 15.0), _line("L3", 6.0, 9.0, visuals=_vis("c3")), _live("V0", "c1", 1.0, 29.0)]
+    rows, track, rep = _lay(items, clips, tail=0)
+    _rows_ok(rows, track["total_us"])
+    assert [s[0] for s in _span(rep, "L1")] == ["c1"] and _span(rep, "L2") == []
+    assert clips["c1"].used == [(us(1.0), us(29.0))] and len(clips["c1"].reuse_used) == 1
+
+
+def test_reuse_visual_on_graphic_clip_starts_at_zero():      # Review Focus 5
+    clips = {"g": _clip("g", 12.0, graphic=True), "c2": _clip("c2", 60)}
+    items = [_line("L", 1.0, 3.0, visuals=[{"clip_id": "g", "at": 0, "reuse": True}]), _live("V", "g", 0.0, 12.0)]
+    rows, track, rep = _lay(items, clips, tail=0)
+    _rows_ok(rows, track["total_us"])
+    assert _span(rep, "L")[0][:2] == ("g", 0)
+    assert clips["g"].used == [(0, us(12.0))]
+
+
+def test_validate_rejects_non_bool_reuse_and_mute():
+    plan = _plan(_line("L1", 0, 1, visuals=[{"clip_id": "c001", "reuse": "yes"}, {"clip_id": "c001", "mute": 1}]))
+    errs, _ = validate(plan, {"c001": 100.0}, {"n1": 60.0})
+    assert any("reuse 要写 true / false" in e for e in errs) and any("mute 要写 true / false" in e for e in errs)

@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+from contextlib import nullcontext
 from dataclasses import dataclass, fields
 
 from common import US, load_json
@@ -112,6 +113,9 @@ def validate(plan, clip_durs, file_durs):
                 errs.append(f"{iid}：end {end}s 超出旁白文件长度 {file_durs[fid]}s")
             for v in it.get("visuals", []):
                 cid = v.get("clip_id") if isinstance(v, dict) else None
+                for f in ("reuse", "mute"):
+                    if isinstance(v, dict) and f in v and not isinstance(v[f], bool):
+                        errs.append(f"{iid}：visuals 的 {f} 要写 true / false，现在是 {v[f]!r}")
                 if cid not in clip_durs:
                     errs.append(f"{iid}：素材 {cid} 不在 inventory 里")
                 elif v.get("at") is not None and not isinstance(v["at"], (int, float)):
@@ -454,8 +458,9 @@ class _Penalty:
         self.clip.frames = self.orig
 
 
-def _try_place(c, at, d, speech):
-    """在素材 c 里放一个长 d 的镜头：有 at 以它为中心，没有就取得分最高的窗口。成功则占用并返回 (a, score)。"""
+def _try_place(c, at, d, speech, reuse=False):
+    """在素材 c 里放一个长 d 的镜头：有 at 以它为中心，没有就取得分最高的窗口。成功则占用并返回 (a, score)。
+    reuse=True 时调用方已在 c.unconstrained() 里，占用记进 reuse_used。"""
     with _Penalty(c, speech.get(c.clip_id)):
         if at is not None:
             w = place_pin(c, round(float(at) * US), d)
@@ -468,14 +473,15 @@ def _try_place(c, at, d, speech):
                 return None
             a = w[0]
         score = c.window_score(a, d)
-    c.used.append((a, a + d))
+    (c.reuse_used if reuse else c.used).append((a, a + d))
     return a, round(score or 0, 3)
 
 
-def _place_in_free_segment(c, d):
+def _place_in_free_segment(c, d, reuse=False):
     """把长 d 的镜头放进素材 c 最长的空闲段（居中）。空闲段起点常不在 STEP 网格上，best_window 会错过它。"""
+    occ = c.reuse_used if reuse else c.used
     segs, cur = [], c.edge
-    for u0, u1 in sorted(c.used):
+    for u0, u1 in sorted(occ):
         segs.append((cur, u0 - c.gap - cur))
         cur = u1 + c.gap
     segs.append((cur, c.dur - c.edge - cur))
@@ -486,31 +492,38 @@ def _place_in_free_segment(c, d):
     score = c.window_score(a, d)
     if score is None or not c.free(a, d):
         return None
-    c.used.append((a, a + d))
+    occ.append((a, a + d))
     return a, round(score, 3)
 
 
-def _place_any(cands, clips, avoid, remaining, speech, partial, last=False):
+def _place_any(cands, clips, avoid, remaining, speech, partial, last=False, soft=frozenset()):
     """按顺序在候选画面里放一个镜头。partial=False 要整块盖住 remaining；partial=True 取素材里最长的空闲段
     （至少 MIN_SHOT）。last=True（本槽最后一块）时不留不足 MIN_SHOT 的零头：零头没有下一块可挪。
-    返回镜头 dict，放不下返回 None。"""
+    返回镜头 dict，放不下返回 None。
+    v["reuse"] 的画面不管素材已被占用的区间（只和别的 reuse 镜头避让），avoid 里属于 soft 的素材
+    （紧跟的原声段用的素材）对它不算数；前一个镜头的同素材仍然避开。"""
     for v in cands:
         c = clips.get(v["clip_id"])
-        if c is None or c.clip_id in avoid:
+        reuse = bool(v.get("reuse"))
+        if c is None or c.clip_id in (avoid - soft if reuse else avoid):
             continue
-        d = remaining
-        if partial:
-            d = min(c.longest_free(), remaining)
-            # 不足 NUDGE_MAX 的零头留给 layout 挤进下一句，不为它把这块缩到「留 MIN_SHOT」
-            if last and NUDGE_MAX <= remaining - d < MIN_SHOT:
-                d = remaining - MIN_SHOT
-            if d < MIN_SHOT:
-                continue
-        w = _try_place(c, v.get("at"), d, speech)
-        if not w and partial:
-            w = _place_in_free_segment(c, d)          # 以 at 为中心 / 网格上都放不下：直接放进最长的空闲段
+        with c.unconstrained() if reuse else nullcontext():
+            d = remaining
+            if partial:
+                d = min(c.longest_free(), remaining)
+                # 不足 NUDGE_MAX 的零头留给 layout 挤进下一句，不为它把这块缩到「留 MIN_SHOT」
+                if last and NUDGE_MAX <= remaining - d < MIN_SHOT:
+                    d = remaining - MIN_SHOT
+                if d < MIN_SHOT:
+                    continue
+            w = _try_place(c, v.get("at"), d, speech, reuse)
+            if not w and partial:
+                w = _place_in_free_segment(c, d, reuse)   # 以 at 为中心 / 网格上都放不下：直接放进最长的空闲段
         if w:
-            return {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1]}
+            shot = {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1]}
+            if reuse:
+                shot["reuse"] = True
+            return shot
     return None
 
 
@@ -519,9 +532,12 @@ def _extend(shot, extra, head=False):
     extra 为负就是剪短（总是可行，只要剩下的不短于 0）。"""
     c, a, d = shot["clip"], shot["in_us"], shot["dur_us"]
     na, nd = (a - extra if head else a), d + extra
-    c.used.remove((a, a + d))
-    ok = nd > 0 and c.edge <= na and na + nd <= c.dur - c.edge and c.free(na, nd) and c.window_score(na, nd) is not None
-    c.used.append((na, na + nd) if ok else (a, a + d))
+    reuse = bool(shot.get("reuse"))
+    occ = c.reuse_used if reuse else c.used
+    occ.remove((a, a + d))
+    with c.unconstrained() if reuse else nullcontext():
+        ok = nd > 0 and c.edge <= na and na + nd <= c.dur - c.edge and c.free(na, nd) and c.window_score(na, nd) is not None
+    occ.append((na, na + nd) if ok else (a, a + d))
     if ok:
         shot["in_us"], shot["dur_us"] = na, nd
     return ok
@@ -630,17 +646,19 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                 avoid = {last["clip"].clip_id} if last else set()
                 if i == len(pieces) - 1 and next_live:
                     avoid.add(next_live)
+                # reuse 画面可以紧挨着用同素材的原声段（但仍不和前一个镜头同素材）
+                soft = frozenset({next_live} - {last["clip"].clip_id if last else None}) if next_live else frozenset()
                 own = ([vis[i]] if i < len(vis) else []) + [v for v in vis if v is not (vis[i] if i < len(vis) else None)]
                 others = [clips[c] for c in pool.get(it["chapter"], []) if c not in avoid]
                 # 先找能整块盖住的；素材都比这块短时，放得下多少放多少，剩下的交给下一个候选。
                 # 本块指定的画面最优先，其次本句别的画面，最后才是借来的（相邻句的画面、本章出现过的素材）
                 tail = i == len(pieces) - 1
 
-                def place(rem, avoid=avoid, own=own, others=others, tail=tail):
-                    p_ = (_place_any(own[:1], clips, avoid, rem, speech, False)
-                          or _place_any(own[:1], clips, avoid, rem, speech, True, tail)
-                          or _place_any(own[1:], clips, avoid, rem, speech, False)
-                          or _place_any(own[1:], clips, avoid, rem, speech, True, tail)
+                def place(rem, avoid=avoid, own=own, others=others, tail=tail, soft=soft):
+                    p_ = (_place_any(own[:1], clips, avoid, rem, speech, False, soft=soft)
+                          or _place_any(own[:1], clips, avoid, rem, speech, True, tail, soft)
+                          or _place_any(own[1:], clips, avoid, rem, speech, False, soft=soft)
+                          or _place_any(own[1:], clips, avoid, rem, speech, True, tail, soft)
                           or _place_any(neighbours, clips, avoid, rem, speech, False))
                     pool_ = [c for c in others if c.clip_id not in avoid]
                     if p_ is None:
