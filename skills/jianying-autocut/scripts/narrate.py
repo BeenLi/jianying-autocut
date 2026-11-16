@@ -496,7 +496,7 @@ def _place_in_free_segment(c, d, reuse=False):
     return a, round(score, 3)
 
 
-def _place_any(cands, clips, avoid, remaining, speech, partial, last=False, soft=frozenset()):
+def _place_any(cands, clips, avoid, remaining, speech, partial, last=False, soft=frozenset(), can_nudge=False):
     """按顺序在候选画面里放一个镜头。partial=False 要整块盖住 remaining；partial=True 取素材里最长的空闲段
     （至少 MIN_SHOT）。last=True（本槽最后一块）时不留不足 MIN_SHOT 的零头：零头没有下一块可挪。
     返回镜头 dict，放不下返回 None。
@@ -511,8 +511,8 @@ def _place_any(cands, clips, avoid, remaining, speech, partial, last=False, soft
             d = remaining
             if partial:
                 d = min(c.longest_free(), remaining)
-                # 不足 NUDGE_MAX 的零头留给 layout 挤进下一句，不为它把这块缩到「留 MIN_SHOT」
-                if last and NUDGE_MAX <= remaining - d < MIN_SHOT:
+                # 不足 NUDGE_MAX 的零头、且下一槽是旁白句（can_nudge）：留给 layout 挤进下一句，不为它缩短这块
+                if last and 0 < remaining - d < MIN_SHOT and not (can_nudge and remaining - d < NUDGE_MAX):
                     d = remaining - MIN_SHOT
                 if d < MIN_SHOT:
                     continue
@@ -663,12 +663,13 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                 # 先找能整块盖住的；素材都比这块短时，放得下多少放多少，剩下的交给下一个候选。
                 # 本块指定的画面最优先，其次本句别的画面，最后才是借来的（相邻句的画面、本章出现过的素材）
                 tail = i == len(pieces) - 1
+                nudge_ok = tail and k + 1 < len(sl) and not sl[k + 1]["live"]
 
-                def place(rem, avoid=avoid, own=own, others=others, tail=tail, soft=soft):
+                def place(rem, avoid=avoid, own=own, others=others, tail=tail, soft=soft, nudge_ok=nudge_ok):
                     p_ = (_place_any(own[:1], clips, avoid, rem, speech, False, soft=soft)
-                          or _place_any(own[:1], clips, avoid, rem, speech, True, tail, soft)
+                          or _place_any(own[:1], clips, avoid, rem, speech, True, tail, soft, nudge_ok)
                           or _place_any(own[1:], clips, avoid, rem, speech, False, soft=soft)
-                          or _place_any(own[1:], clips, avoid, rem, speech, True, tail, soft)
+                          or _place_any(own[1:], clips, avoid, rem, speech, True, tail, soft, nudge_ok)
                           or _place_any(neighbours, clips, avoid, rem, speech, False))
                     pool_ = [c for c in others if c.clip_id not in avoid]
                     if p_ is None:
@@ -677,7 +678,7 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                         if p_ is not None:
                             p_["kind"] = "narr"
                     return p_ or _place_any(neighbours + [{"clip_id": c.clip_id} for c in pool_],
-                                            clips, avoid, rem, speech, True, tail)
+                                            clips, avoid, rem, speech, True, tail, soft, nudge_ok)
                 placed = place(remaining)
                 if placed is None:
                     raise ValueError(f"章节 {it['chapter']}（{it['id']}）没有可用的素材来铺这句旁白："

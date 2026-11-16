@@ -817,3 +817,15 @@ def test_tiny_remainder_nudged_when_empty_lines_continue_graphic():
     assert [(r["source"], r["dur_us"]) for r in rows[:1]] == [("/x/g.mp4", us(21.0))]
     assert rows[1]["source"] == "/x/c2.mp4" and rows[1]["start_us"] == us(21.0)
     assert all(r["dur_us"] >= MIN_SHOT for r in rows)
+
+
+def test_no_sliver_when_remainder_cannot_be_nudged():
+    # 本块指定的素材只差 50ms 盖不住，下一槽是原声段 / 本槽是最后一槽：不能挤，也不能留下 50ms 的镜头
+    from plan import MIN_SHOT
+    cases = [[_line("A", 1.0, 2.45, visuals=_vis("c1", "c9")), _live("V", "c7", 30.0, 35.0)],
+             [_line("A", 0.1, 0.25, visuals=_vis("c1", "c9"))]]
+    for items in cases:
+        rows, track, rep = _lay(items, {"c1": _clip("c1", 4.0), "c9": _clip("c9", 60), "c7": _clip("c7", 60)})
+        _rows_ok(rows, track["total_us"])
+        assert rep["items"][0]["end_us"] - rep["items"][0]["start_us"] == us(3.05)
+        assert all(r["dur_us"] >= MIN_SHOT for r in rows), [(r["name"], r["dur_us"]) for r in rows]
