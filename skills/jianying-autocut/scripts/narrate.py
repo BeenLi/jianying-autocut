@@ -24,7 +24,7 @@ import sys
 from dataclasses import dataclass, fields
 
 from common import US, load_json
-from plan import EDGE, MIN_SHOT, fmt, load_clips, pick_one, place_pin, write_shots
+from plan import MIN_SHOT, fmt, load_clips, pick_one, place_pin, write_shots
 
 RESTART_WORDS = ("重来", "不对", "再来一遍")
 RETAKE_RATIO = 0.8       # 两句相似到这个程度，就当作同一句录了两遍
@@ -473,11 +473,11 @@ def _try_place(c, at, d, speech):
 
 def _place_in_free_segment(c, d):
     """把长 d 的镜头放进素材 c 最长的空闲段（居中）。空闲段起点常不在 STEP 网格上，best_window 会错过它。"""
-    segs, cur = [], EDGE
+    segs, cur = [], c.edge
     for u0, u1 in sorted(c.used):
         segs.append((cur, u0 - c.gap - cur))
         cur = u1 + c.gap
-    segs.append((cur, c.dur - EDGE - cur))
+    segs.append((cur, c.dur - c.edge - cur))
     a, length = max(segs, key=lambda x: x[1])
     if length < d:
         return None
@@ -518,7 +518,7 @@ def _extend(shot, extra, head=False):
     c, a, d = shot["clip"], shot["in_us"], shot["dur_us"]
     na, nd = (a - extra if head else a), d + extra
     c.used.remove((a, a + d))
-    ok = nd > 0 and EDGE <= na and na + nd <= c.dur - EDGE and c.free(na, nd) and c.window_score(na, nd) is not None
+    ok = nd > 0 and c.edge <= na and na + nd <= c.dur - c.edge and c.free(na, nd) and c.window_score(na, nd) is not None
     c.used.append((na, na + nd) if ok else (a, a + d))
     if ok:
         shot["in_us"], shot["dur_us"] = na, nd

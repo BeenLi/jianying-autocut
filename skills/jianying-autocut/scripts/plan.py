@@ -69,12 +69,12 @@ def fmt(us):
     return f"{int(s // 60)}:{s % 60:04.1f}"
 
 
-def snap_to_silence(a, d, silences, dur):
+def snap_to_silence(a, d, silences, dur, edge=EDGE):
     """把窗口 [a, a+d) 整体平移到「入点落在最近静音段中点」，平移超过 SNAP_MAX 或越界就不动。"""
     best = a
     for s0, s1 in silences:
         mid = (s0 + s1) // 2
-        if abs(mid - a) <= SNAP_MAX and EDGE <= mid <= dur - EDGE - d:
+        if abs(mid - a) <= SNAP_MAX and edge <= mid <= dur - edge - d:
             if best == a or abs(mid - a) < abs(best - a):
                 best = mid
     return best
@@ -83,20 +83,22 @@ def snap_to_silence(a, d, silences, dur):
 # ---------- 素材 ----------
 
 class Clip:
-    def __init__(self, row, frames, silences):
+    def __init__(self, row, frames, silences, graphic=False):
         self.clip_id = row["clip_id"]
         self.path = row["path"]
         self.name = row["name"]
         self.shot_time = row["shot_time"]
         self.dur = round(float(row["duration_s"]) * US)
-        self.frames = sorted(frames)        # [(t_us, score, bad)]
+        self.graphic = graphic              # 图形素材（地图动画、卡片）：不判画质，首尾也能用
+        self.edge = 0 if graphic else EDGE
+        self.frames = [] if graphic else sorted(frames)   # [(t_us, score, bad)]
         self.silences = silences            # [(s0_us, s1_us)]
         self.used = []                      # [(in_us, out_us)]
         self.gap = GAP                      # 同素材两次取用的最小间隔（精简模式会放大，避免留下相邻的重复画面）
 
     @property
     def usable(self):
-        return max(0, self.dur - 2 * EDGE)
+        return max(0, self.dur - 2 * self.edge)
 
     @property
     def good_usable(self):
@@ -122,16 +124,16 @@ class Clip:
         return all(a + d + self.gap <= u0 or a >= u1 + self.gap for u0, u1 in self.used)
 
     def feasible(self, a, d):
-        return EDGE <= a <= self.dur - EDGE - d and self.free(a, d) and self.window_score(a, d) is not None
+        return self.edge <= a <= self.dur - self.edge - d and self.free(a, d) and self.window_score(a, d) is not None
 
     def snap(self, a, d):
         if not self.silences:
             return a
-        b = snap_to_silence(a, d, self.silences, self.dur)
+        b = snap_to_silence(a, d, self.silences, self.dur, self.edge)
         return b if b != a and self.feasible(b, d) else a
 
     def best_window(self, d):
-        lo, hi = EDGE, self.dur - EDGE - d
+        lo, hi = self.edge, self.dur - self.edge - d
         if hi < lo:
             return None
         best = None
@@ -149,20 +151,21 @@ class Clip:
         return best
 
     def longest_free(self):
-        segs, cur = [], EDGE
+        segs, cur = [], self.edge
         for u0, u1 in sorted(self.used):
             segs.append(u0 - self.gap - cur)
             cur = u1 + self.gap
-        segs.append(self.dur - EDGE - cur)
+        segs.append(self.dur - self.edge - cur)
         return max(segs + [0])
 
 
 def load_clips(work):
     # 第 3 步判出的歪倒帧（orientation.json）同样当坏帧
-    tilted = {}
     op = os.path.join(work, "orientation.json")
-    tilted = {cid: {round(t * 100) for t in d.get("bad", [])}
-              for cid, d in load_json(op, default={}, kind=dict).get("clips", {}).items()}
+    orient = load_json(op, default={}, kind=dict).get("clips", {})
+    tilted = {cid: {round(t * 100) for t in d.get("bad", [])} for cid, d in orient.items()}
+    # 图形素材不判画质；标了 unusable 的仍按坏帧整段排除
+    graphic = {cid for cid, d in orient.items() if d.get("graphic") and not d.get("unusable")}
     frames = defaultdict(list)
     fp = os.path.join(work, "frames.csv")
     if os.path.exists(fp):
@@ -173,7 +176,7 @@ def load_clips(work):
     sp = os.path.join(work, "silences.json")
     sil = {k: [(round(a * US), round(b * US)) for a, b in v]
            for k, v in load_json(sp, default={}, kind=dict).items()}
-    clips = {r["clip_id"]: Clip(r, frames.get(r["path"], []), sil.get(r["clip_id"], []))
+    clips = {r["clip_id"]: Clip(r, frames.get(r["path"], []), sil.get(r["clip_id"], []), r["clip_id"] in graphic)
              for r in read_csv(os.path.join(work, "inventory.csv"))}
     return clips, bool(frames)
 
@@ -234,10 +237,10 @@ def place_pin(c, at, d):
     """以 at 为中心放一个长度 d 的窗口；不可行就每 0.5s 向两侧平移，始终包含 at。"""
     d = min(d, c.usable)
     base = at - d // 2
-    lo, hi = EDGE, c.dur - EDGE - d
+    lo, hi = c.edge, c.dur - c.edge - d
     for k in range(0, 2 * d // STEP + 1):
         off = (k + 1) // 2 * STEP * (1 if k % 2 else -1)
-        a = min(max(base + off, lo), hi)   # 夹回可行范围：镜头占满短素材时只有 a=EDGE 一个入点，步长网格会错过它
+        a = min(max(base + off, lo), hi)   # 夹回可行范围：镜头占满短素材时只有 a=edge 一个入点，步长网格会错过它
         if a <= at < a + d and c.feasible(a, d):
             return a, d
     return None
@@ -262,13 +265,13 @@ def place_pins(pool, quota, rng, pins, rhythm=RHYTHM):
             s0, e0 = (round(float(x) * US) for x in p["cover"])
             need = e0 - s0
             d = max(d, min(need, c.longest_free(), remaining))
-            lo, hi = max(EDGE, e0 - d), min(s0, c.dur - EDGE - d)      # 能盖住整句的入点范围
+            lo, hi = max(c.edge, e0 - d), min(s0, c.dur - c.edge - d)      # 能盖住整句的入点范围
             mid = s0 - (d - need) // 2
             starts = sorted({lo, hi, min(max(mid, lo), hi)} | set(range(lo, hi + 1, STEP)), key=lambda x: abs(x - mid))
             w = next(((x, d) for x in starts if lo <= hi and c.feasible(x, d)), None)
             if w is None:
                 why = (f"只放得下 {d / US:.1f}s" if d < need else
-                       "句子贴着素材开头 / 结尾（首尾 0.5s 不取）" if s0 < EDGE or e0 > c.dur - EDGE else
+                       "句子贴着素材开头 / 结尾（首尾 0.5s 不取）" if s0 < c.edge or e0 > c.dur - c.edge else
                        "句子范围里有坏帧或已被占用")
                 print(f"  ⚠ 口播 {p['clip_id']}@{p['at']}s 整句 {need / US:.1f}s：{why}，句子会被剪断")
         w = w or place_pin(c, at, d)
