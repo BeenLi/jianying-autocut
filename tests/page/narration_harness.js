@@ -75,6 +75,43 @@ const results = {};
   await tick();
   results.restore = calls.some((c) => c.path === "nmatch/X01" && c.data.skip === false);
 
+  // 7. 画面卡片的「允许重复用」「消音」勾选框（旧数据没有这两个字段）
+  fire("nmatch", { L01: { file: "n1", start: 1, end: 4, visuals: [{ clip_id: "c001", at: 12 }], confirmed: false, by: "claude" } });
+  click({ act: "sel", id: "L01" });
+  const box = (k) => (app.innerHTML.match(new RegExp(`<input[^>]*id="${k}"[^>]*>`)) || [""])[0];
+  calls.length = 0;
+  click({ act: "confirm-n", id: "L01" });
+  await tick();
+  results.oldVisualsRender = box("vr-L01-0") !== "" && box("vm-L01-0") !== "" && !/checked/.test(box("vr-L01-0") + box("vm-L01-0"))
+    && calls.length > 0 && calls.every((c) => !/reuse|mute/.test(JSON.stringify(c.data)));
+  calls.length = 0;
+  listeners.change({ target: { id: "vm-L01-0", type: "checkbox", checked: true, dataset: { act: "vflag-n", id: "L01", i: "0", f: "mute" } } });
+  await tick();
+  const vf = calls.find((c) => c.path === "nmatch/L01" && c.data.visuals);
+  results.vflagWrites = !!vf && vf.data.visuals[0].mute === true && vf.data.visuals[0].at === 12 && !("reuse" in vf.data.visuals[0])
+    && vf.data.by === "user";
+  fire("nmatch", { L01: { file: "n1", start: 1, end: 4, visuals: [{ clip_id: "c001", at: 12, mute: true }], confirmed: true, by: "user" } });
+  results.vflagWrites = results.vflagWrites && /checked/.test(box("vm-L01-0")) && !/checked/.test(box("vr-L01-0"));
+  calls.length = 0;
+  listeners.change({ target: { id: "vm-L01-0", type: "checkbox", checked: false, dataset: { act: "vflag-n", id: "L01", i: "0", f: "mute" } } });
+  await tick();
+  const un = calls.find((c) => c.path === "nmatch/L01" && c.data.visuals);
+  results.vflagWrites = results.vflagWrites && !!un && !("mute" in un.data.visuals[0]);
+  // 换画面：同一素材只改时间就保留勾选，换了素材就清空
+  fire("nmatch", { L01: { file: "n1", start: 1, end: 4, visuals: [{ clip_id: "c001", at: 12, mute: true, reuse: true }], confirmed: true, by: "user" } });
+  const reassign = async (clip, at) => {
+    calls.length = 0;
+    els["n-clip-L01"] = { id: "n-clip-L01", value: clip }; els["n-at-L01"] = { id: "n-at-L01", value: at };
+    click({ act: "reassign-n", id: "L01" });
+    await tick();
+    const w = calls.find((c) => c.path === "nmatch/L01" && c.data.visuals);
+    return w && w.data.visuals[0];
+  };
+  const kept = await reassign("c001", "15");
+  results.reassignKeepsFlags = !!kept && kept.at === 15 && kept.mute === true && kept.reuse === true;
+  const cleared = await reassign("c002", "");
+  results.reassignClearsFlags = !!cleared && cleared.clip_id === "c002" && !("mute" in cleared) && !("reuse" in cleared);
+
   console.log(JSON.stringify(results));
   process.exit(Object.values(results).every(Boolean) ? 0 : 1);
 })();
