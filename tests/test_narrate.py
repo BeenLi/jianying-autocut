@@ -776,3 +776,29 @@ def test_validate_rejects_non_bool_reuse_and_mute():
     plan = _plan(_line("L1", 0, 1, visuals=[{"clip_id": "c001", "reuse": "yes"}, {"clip_id": "c001", "mute": 1}]))
     errs, _ = validate(plan, {"c001": 100.0}, {"n1": 60.0})
     assert any("reuse 要写 true / false" in e for e in errs) and any("mute 要写 true / false" in e for e in errs)
+
+
+# ---------- visuals.mute ----------
+
+def test_mute_flag_reaches_shot_rows_and_dry_run(tmp_path, capsys):
+    items = [_line("L1", 1.0, 3.0, visuals=[{"clip_id": "c1", "mute": True}]), _line("L2", 6.0, 8.0, visuals=_vis("c2")),
+             _line("L3", 11.0, 13.0, visuals=_vis("c1"))]
+    rows, _, rep = _lay(items, _clips(("c1", 60), ("c2", 60)))
+    assert [r["mute"] for r in rows] == ["1", "", ""]
+    assert rep["items"][0]["shots"][0][3] == {"mute": True} and rep["items"][1]["shots"][0][3] == {}
+    w = _work(tmp_path)
+    p = json.loads((tmp_path / "narration_plan.json").read_text())
+    p["items"][0]["visuals"] = [{"clip_id": "c1", "mute": True}]
+    (tmp_path / "narration_plan.json").write_text(json.dumps(p))
+    assert main(["--work", w, "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "（消音）" in out and out.count("（消音）") == 1
+
+
+def test_reuse_flag_shown_in_dry_run(tmp_path, capsys):
+    w = _work(tmp_path)
+    p = json.loads((tmp_path / "narration_plan.json").read_text())
+    p["items"][0]["visuals"] = [{"clip_id": "c1", "reuse": True}]
+    (tmp_path / "narration_plan.json").write_text(json.dumps(p))
+    assert main(["--work", w, "--dry-run"]) == 0
+    assert "（重复用）" in capsys.readouterr().out

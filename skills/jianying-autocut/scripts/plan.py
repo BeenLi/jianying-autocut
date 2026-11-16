@@ -54,7 +54,8 @@ MIN_KEEP_SCORE = 0.2       # 精简模式：最好的窗口都低于这个分，
 NO_LIMIT = 10 ** 15        # 精简模式没有总时长配额
 
 FIELDS = ["idx", "chapter", "chapter_title", "chapter_function", "kind", "name", "source",
-          "in_s", "dur_s", "start_s", "in_us", "dur_us", "start_us", "score"]
+          "in_s", "dur_s", "start_s", "in_us", "dur_us", "start_us", "score",
+          "mute"]                 # 旁白片：visuals.mute 的镜头为 "1"，垫底原声静音；其余留空
 
 
 def parse_target(s):

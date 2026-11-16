@@ -523,6 +523,8 @@ def _place_any(cands, clips, avoid, remaining, speech, partial, last=False, soft
             shot = {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1]}
             if reuse:
                 shot["reuse"] = True
+            if v.get("mute"):
+                shot["mute"] = True
             return shot
     return None
 
@@ -713,14 +715,16 @@ def layout(plan, clips, speech, silences, file_durs, opts):
         it = items[s["item"]]
         report["items"].append({"item": it["id"], "start_us": s["start_us"], "end_us": s["end_us"],
                                 "text": it.get("text", it.get("reason", "")), "live": s["live"],
-                                "shots": [(sh["clip"].clip_id, sh["in_us"], sh["dur_us"]) for sh in shots.get(k, [])]})
+                                "shots": [(sh["clip"].clip_id, sh["in_us"], sh["dur_us"],
+                                           {f: True for f in ("reuse", "mute") if sh.get(f)})
+                                          for sh in shots.get(k, [])]})
         for sh in shots.get(k, []):
             c = sh["clip"]
             rows.append({"idx": len(rows) + 1, "chapter": ch_no[it["chapter"]], "chapter_title": ch_title[it["chapter"]],
                          "chapter_function": "", "kind": sh["kind"], "name": c.name, "source": c.path,
                          "in_s": round(sh["in_us"] / US, 3), "dur_s": round(sh["dur_us"] / US, 3),
                          "start_s": round(t / US, 3), "in_us": sh["in_us"], "dur_us": sh["dur_us"],
-                         "start_us": t, "score": sh["score"]})
+                         "start_us": t, "score": sh["score"], "mute": "1" if sh.get("mute") else ""})
             t += sh["dur_us"]
     track = {"audio": [dict(a, file=plan["files"][a["fid"]]) for a in tl["audio"]],
              "subs": [], "speech": [], "live": [], "bgm": [], "total_us": tl["total_us"]}
@@ -782,8 +786,9 @@ def _print_report(plan, rows, track, report, notes):
         print(f"  {fmt(e['start_us'])}–{fmt(e['end_us'])} {e['item']} {tag}「{e['text'][:24]}」")
         if not e["live"] and not e["shots"]:
             print("      （延续上一镜头）")
-        for cid, a, d in e["shots"]:
-            print(f"      {cid}@{a / US:.1f}s +{d / US:.1f}s  {note_at(notes, cid, (a + d / 2) / US)[:30]}")
+        for cid, a, d, flags in e["shots"]:
+            tag = ("（重复用）" if flags.get("reuse") else "") + ("（消音）" if flags.get("mute") else "")
+            print(f"      {cid}@{a / US:.1f}s +{d / US:.1f}s{tag}  {note_at(notes, cid, (a + d / 2) / US)[:30]}")
     for iid, why in report["skipped"]:
         print(f"  跳过 {iid}「{items[iid].get('text', '')[:20]}」：{why}")
     for iid, cid in report["fallback"]:

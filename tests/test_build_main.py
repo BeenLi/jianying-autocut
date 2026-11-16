@@ -199,3 +199,55 @@ def test_broken_orientation_json_keeps_old_draft(tmp_path, monkeypatch):   # A4
     with pytest.raises(SystemExit, match="orientation.json"):
         _run(monkeypatch, "--work", str(work), "--name", "旧草稿", "--drafts-dir", str(drafts), "--replace")
     assert (old / "keep.txt").exists()
+
+
+def _mute_shots(work, tmp_path):
+    """两个垫底镜头：a.mp4 标了 mute，b.mp4 没标（总长和 live=False 的轨道一致）。"""
+    from common import write_csv
+    import plan
+    rows = [{"idx": 1, "chapter": 1, "chapter_title": "出发", "chapter_function": "", "kind": "narr", "name": "a.mp4",
+             "source": str(tmp_path / "a.mp4"), "in_s": 1, "dur_s": 2.5, "start_s": 0, "in_us": 1000000,
+             "dur_us": 2500000, "start_us": 0, "score": 0.5, "mute": "1"},
+            {"idx": 2, "chapter": 1, "chapter_title": "出发", "chapter_function": "", "kind": "narr", "name": "b.mp4",
+             "source": str(tmp_path / "b.mp4"), "in_s": 1, "dur_s": 2.5, "start_s": 2.5, "in_us": 1000000,
+             "dur_us": 2500000, "start_us": 2500000, "score": 0.5, "mute": ""}]
+    write_csv(str(work / "shots.csv"), rows, plan.FIELDS)
+
+
+def test_muted_narr_shot_volume_zero_even_with_volume_flag(tmp_path, monkeypatch):
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    _mute_shots(work, tmp_path)
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -6.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    _run(monkeypatch, "--work", str(work), "--name", "消音", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"), "--volume", "0.3")
+    d = json.load(open(drafts / "消音" / "draft_info.json"))
+    video = [t for t in d["tracks"] if t["type"] == "video"][0]["segments"]
+    assert [v["volume"] for v in video] == [0.0, 0.3]
+
+
+def test_muted_only_clip_bed_is_not_measured(tmp_path, monkeypatch):
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    _mute_shots(work, tmp_path)
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -6.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    seen = []
+    m0 = loudness.measure
+    monkeypatch.setattr(loudness, "measure", lambda p, *a: seen.append(os.path.basename(p)) or m0(p, *a))
+    _run(monkeypatch, "--work", str(work), "--name", "消音2", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"))
+    d = json.load(open(drafts / "消音2" / "draft_info.json"))
+    video = [t for t in d["tracks"] if t["type"] == "video"][0]["segments"]
+    assert video[0]["volume"] == 0.0 and abs(video[1]["volume"] - loudness.bed_gain(-30.0)) < 1e-6
+    assert "a.mp4" not in seen
+
+
+def test_old_shots_csv_without_mute_column_builds(tmp_path, monkeypatch):      # Review Focus 1
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)          # _narration 写的 shots.csv 没有 mute 列
+    assert "mute" not in (work / "shots.csv").read_text().splitlines()[0]
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -6.0), "a.mp4": (-30.0, -10.0)})
+    _run(monkeypatch, "--work", str(work), "--name", "旧表", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"), "--volume", "0.3")
+    d = json.load(open(drafts / "旧表" / "draft_info.json"))
+    assert [t for t in d["tracks"] if t["type"] == "video"][0]["segments"][0]["volume"] == 0.3

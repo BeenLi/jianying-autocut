@@ -150,6 +150,11 @@ def injected_audio(path, duration_us):
     return m
 
 
+def _muted(shot):
+    """shots.csv 的 mute 列（旧表没有这一列）：旁白片里这个垫底镜头静音。"""
+    return shot.get("kind") == "narr" and str(shot.get("mute") or "") in ("1", "True", "true")
+
+
 def narration_mix(cache, narr, shots, inv, speech_json):
     """旁白片的音量：返回 (旁白文件增益 {path: g}, 原声段增益 {clip_id: g}, 垫底 {clip_id: g}, 人声电平 {key: LUFS}, 报告)。
     人声电平的 key：旁白文件路径，或 "live:<clip_id>"。"""
@@ -178,7 +183,7 @@ def narration_mix(cache, narr, shots, inv, speech_json):
         live_gain[cid], level["live:" + cid] = g, m["i"] + loudness.db(g)
     for s in shots:
         cid = s["clip_id"]
-        if s["kind"] == "narr" and cid not in bed:
+        if s["kind"] == "narr" and cid not in bed and not _muted(s):   # 只在消音镜头里出现的素材不用测
             row = by_cid[cid]
             bed[cid] = loudness.bed_gain(cache.measure(row["path"])["i"]) if str(row.get("has_audio")) == "True" else 0.0
     return vo_gain, live_gain, bed, level, notes
@@ -505,7 +510,7 @@ def main():
         t0 = int(s["start_us"])
         if narr is not None:   # 旁白片：原声音量只由镜头类型决定
             cid = inv[src]["clip_id"]
-            vol = live_gain.get(cid, 1.0) if s["kind"] == "live" else (
+            vol = live_gain.get(cid, 1.0) if s["kind"] == "live" else 0.0 if _muted(s) else (
                 args.volume if args.volume is not None else bed.get(cid, 0.0))
         else:
             talks = any(a < t0 + dur and t0 < a + d for a, d, _ in subs)
