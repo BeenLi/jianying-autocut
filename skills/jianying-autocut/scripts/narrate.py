@@ -37,6 +37,7 @@ SPLIT_GAIN = 0.05        # 和前一段拼起来比单独更像稿子这么多�
 OVERLAP_TOL = 0.3        # 相邻两句在源文件里重叠不超过这么多秒（Whisper 边界误差）仍算连续
 BGM_MODES = ("up", "drop")
 TALK_PENALTY = 0.5       # 素材里对镜说话的区间，挑画面时得分乘这个系数（免得画面张嘴、声音是旁白）
+NUDGE_MAX = int(0.1 * US)  # 一槽末尾剩下不到这么长、下一槽是旁白句时，分界线提前挤给下一句
 SUB_MAX = 16             # 每条字幕最多这么多字
 SUB_BREAK = "，。！？；、,.!?;"
 
@@ -500,7 +501,8 @@ def _place_any(cands, clips, avoid, remaining, speech, partial, last=False):
         d = remaining
         if partial:
             d = min(c.longest_free(), remaining)
-            if last and 0 < remaining - d < MIN_SHOT:
+            # 不足 NUDGE_MAX 的零头留给 layout 挤进下一句，不为它把这块缩到「留 MIN_SHOT」
+            if last and NUDGE_MAX <= remaining - d < MIN_SHOT:
                 d = remaining - MIN_SHOT
             if d < MIN_SHOT:
                 continue
@@ -664,6 +666,11 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                         remaining = 0
                     elif i + 1 < len(pieces):
                         pieces[i + 1] += remaining
+                        remaining = 0
+                    elif remaining < NUDGE_MAX and k + 1 < len(sl) and not sl[k + 1]["live"]:
+                        # 微小零头（如 21.0s 的地图配 21.031s 的槽）：分界线提前，挤给下一句，不为它切一刀
+                        s["end_us"] -= remaining
+                        sl[k + 1]["start_us"] -= remaining
                         remaining = 0
                     else:
                         cut = MIN_SHOT - remaining

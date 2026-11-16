@@ -192,11 +192,11 @@ from narrate import layout, main, slots, split_sub
 from plan import Clip
 
 
-def _clip(cid, dur, bad=False, score=0.8):
+def _clip(cid, dur, bad=False, score=0.8, graphic=False):
     row = {"clip_id": cid, "path": f"/x/{cid}.mp4", "name": f"{cid}.mp4", "shot_time": "2026-10-05T00:00:00",
            "duration_s": dur}
     frames = [(t * US, score, int(bad)) for t in range(int(dur))]
-    return Clip(row, frames, [])
+    return Clip(row, frames, [], graphic)
 
 
 def _clips(*specs):
@@ -677,3 +677,36 @@ def test_layout_never_leaves_a_sub_two_second_shot():                # I1：审�
                 bad += [(c2d, L, r["name"], r["dur_us"]) for r in short]
             bad += [(c2d, L, "相邻", a["name"]) for a, b in zip(rows, rows[1:]) if a["name"] == b["name"]]
     assert bad == []
+
+
+# ---------- 零头挤给下一句 ----------
+# A 的槽长 = end + 1.8s：19.231 → 21.031s，比 21.0s 的图形素材 g 长 31ms
+
+def _nudge_clips():
+    return {"g": _clip("g", 21.0, graphic=True), "c2": _clip("c2", 60), "c7": _clip("c7", 60)}
+
+
+def test_tiny_remainder_is_nudged_into_next_line():
+    from plan import MIN_SHOT
+    items = [_line("A", 1.0, 19.231, visuals=_vis("g")), _line("B", 2.0, 8.0, file="n2", visuals=_vis("c2"))]
+    rows, track, rep = _lay(items, _nudge_clips())
+    _rows_ok(rows, track["total_us"])
+    a, b = rep["items"]
+    assert a["shots"] and [s[0] for s in a["shots"]] == ["g"] and a["shots"][0][2] == us(21.0)
+    assert a["end_us"] == b["start_us"] == us(21.0)
+    assert rows[1]["start_us"] == us(21.0) and rows[1]["source"] == "/x/c2.mp4"
+    assert all(r["dur_us"] >= MIN_SHOT for r in rows)
+
+
+def test_no_nudge_before_live_or_at_end():               # Review Focus 2
+    from plan import MIN_SHOT
+    # 原声段前的槽到原声段（含片头延伸）开始为止：A 的结尾调到让槽长 21.031s
+    cases = [[_line("A", 1.0, 20.431, visuals=_vis("g", "c2")), _live("V", "c7", 30.0, 35.0)],
+             [_line("A", 1.0, 19.231, visuals=_vis("g", "c2"))]]
+    for items in cases:
+        rows, track, rep = _lay(items, _nudge_clips())
+        _rows_ok(rows, track["total_us"])
+        plan = _plan(*items)
+        sl = slots(timeline(plan, {}, {"n1": 60.0, "n2": 60.0}, Opts()), plan, Opts())
+        assert [(e["start_us"], e["end_us"]) for e in rep["items"]] == [(x["start_us"], x["end_us"]) for x in sl]
+        assert all(r["dur_us"] >= MIN_SHOT for r in rows)
