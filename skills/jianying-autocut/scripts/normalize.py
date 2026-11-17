@@ -15,18 +15,31 @@ import json
 import os
 import re
 import subprocess
-from collections import defaultdict
 
 TARGET = "I=-16:TP=-1.5:LRA=11"
 KEY = "norm"                 # loudness.Cache 里的额外标记
 
 
-def copy_names(paths):
-    """{原路径: 副本文件名（不含扩展名）}：去掉扩展名后同名的，按原路径排序依次加 _n2、_n3。"""
-    groups = defaultdict(list)
+def copy_names(paths, prev=None):
+    """{原路径: 副本文件名（不含扩展名）}：去掉扩展名后同名的，依次加 _n2、_n3。
+    prev：上次分给各原路径的名字（从缓存读）。还能用的（属于这个原文件名、没被别人占）照旧，
+    这样新加一个同名文件时，已有的副本不会改名重做；其余按原路径排序分配空着的名字。"""
+    prev, names, taken = prev or {}, {}, set()
+    def base(p):
+        return os.path.splitext(os.path.basename(p))[0]
     for p in sorted(set(paths)):
-        groups[os.path.splitext(os.path.basename(p))[0]].append(p)
-    return {p: base if k == 0 else f"{base}_n{k + 1}" for base, ps in groups.items() for k, p in enumerate(ps)}
+        n = prev.get(p)
+        if n and n not in taken and (n == base(p) or re.fullmatch(re.escape(base(p)) + r"_n\d+", n)):
+            names[p] = n
+            taken.add(n)
+    for p in sorted(set(paths) - set(names)):
+        n, k = base(p), 1
+        while n in taken:
+            k += 1
+            n = f"{base(p)}_n{k}"
+        names[p] = n
+        taken.add(n)
+    return names
 
 
 def _run(cmd):

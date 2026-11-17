@@ -167,13 +167,20 @@ def narration_mix(cache, narr, shots, inv, speech_json, norm_dir):
     归一化失败（没有 ffmpeg、文件坏了）直接退出：悄悄引用原文件会让各段旁白响度又不一致。"""
     notes, vo_gain, live_gain, bed, level, copies = [], {}, {}, {}, {}, {}
     paths = sorted({a["file"] for a in narr["audio"]})
-    names = normalize.copy_names(paths)
+    prev = {p: os.path.splitext(os.path.basename(h["out"]))[0]
+            for p in paths if (h := cache.get(p, normalize.KEY)) and h.get("out")}
+    names = normalize.copy_names(paths, prev)
     for path in paths:
         try:
             copies[path], info = normalize.normalize(path, norm_dir, cache, name=names[path])
             before, after = cache.measure(path)["i"], cache.measure(copies[path])["i"]
+        except FileNotFoundError as e:
+            raise SystemExit(f"旁白归一化失败：没找到 ffmpeg（brew install ffmpeg）：{os.path.basename(path)}：{e}")
+        except subprocess.CalledProcessError as e:
+            why = next((l for l in reversed((e.stderr or "").splitlines()) if l.strip()), f"ffmpeg 退出码 {e.returncode}")
+            raise SystemExit(f"旁白归一化失败：{os.path.basename(path)}：{why.strip()}（检查这个文件能不能正常播放）")
         except (OSError, subprocess.SubprocessError, ValueError) as e:
-            raise SystemExit(f"旁白归一化失败（需要 ffmpeg）：{os.path.basename(path)}：{e}")
+            raise SystemExit(f"旁白归一化失败：{os.path.basename(path)}：{e}")
         vo_gain[path], level[path] = 1.0, after
         notes.append(f"{os.path.basename(path)} {before:.1f} → {after:.1f} LUFS"
                      f"（{'线性' if info['type'] == 'linear' else '限幅'}）")
