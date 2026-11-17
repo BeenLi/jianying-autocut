@@ -680,9 +680,6 @@ def main():
     print("  ✓ 零缝隙零重叠 ✓ 时长精确 ✓ 无悬空引用 ✓ 素材零复制 ✓ 版本号对齐" + (" ✓ BGM 铺满不越界" if bgm_count else ""))
     if narr is not None:
         print(f"  旁白 {narr_count} 段 / 原声段 {len(narr['live'])} 个 / 字幕 {len(subs)} 条")
-        boosted = [c for c, g in live_gain.items() if g > 1]   # 旁白已用归一化副本，只剩原声段可能放大
-        if boosted:
-            print(f"  ⚠ 音量放大（>100%）待真机验证剪映是否生效：{'、'.join(boosted)}")
         for n in mix_notes:
             print("  ⚠" if "人声只比" in n or "太" in n else "  ·", n)
     if args.subs:

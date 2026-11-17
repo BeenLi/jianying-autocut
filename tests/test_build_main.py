@@ -165,10 +165,8 @@ def test_build_main_narration(tmp_path, monkeypatch, capsys):
     texts = json.dumps(d["materials"].get("texts", []), ensure_ascii=False)
     assert "出发" in texts
     out = capsys.readouterr().out
-    assert "✓" in out and "待真机验证" in out
+    assert "✓" in out and "待真机验证" not in out      # 剪映 11.8.0 实测认 >100% 的音量（2026-11-17）
     assert "vo.m4a -22.0 → -16.0 LUFS（限幅）" in out and str(work / "旁白_归一化") in out
-    boosted = next(l for l in out.splitlines() if "待真机验证" in l)
-    assert "vo.m4a" not in boosted and "c002" in boosted
 
 
 def test_narration_copy_short_of_target_reports_too_quiet(tmp_path, monkeypatch, capsys):
