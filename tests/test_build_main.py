@@ -291,3 +291,34 @@ def test_old_shots_csv_without_mute_column_builds(tmp_path, monkeypatch):      #
          "--narration", str(work / "narration_track.json"), "--volume", "0.3")
     d = json.load(open(drafts / "旧表" / "draft_info.json"))
     assert [t for t in d["tracks"] if t["type"] == "video"][0]["segments"][0]["volume"] == 0.3
+
+
+class _LiveCache:
+    """narration_mix 的原声段只用 cache.measure(path, a, b)：返回固定的人声响度、真峰值和短时响度（定底噪）。"""
+    def __init__(self, i, tp, floor):
+        self.m = {"i": i, "tp": tp, "short": [(0, floor), (1, i)]}
+
+    def measure(self, path, a=None, b=None):
+        return self.m
+
+
+def _live_mix(i, tp, floor):
+    narr = {"audio": [], "live": [{"clip_id": "c001", "src_us": 0, "dur_us": 8_000_000, "start_us": 0}]}
+    inv = {"c001": {"clip_id": "c001", "path": "/x/a.mp4", "has_audio": "True"}}
+    speech = {"c001": [{"start": 0.5, "end": 7.5, "text": "x"}]}
+    _, live_gain, _, level, notes, _ = build.narration_mix(_LiveCache(i, tp, floor), narr, [], inv, speech, "/x/n")
+    return live_gain["c001"], level["live:c001"], notes
+
+
+def test_live_segments_target_minus_19():
+    g, lv, notes = _live_mix(-25.0, -10.0, -60.0)
+    assert lv == pytest.approx(-19.0) and g == pytest.approx(10 ** (6 / 20))
+    g, lv, _ = _live_mix(-18.0, -1.2, -60.0)       # 偏响的也拉到 -19，几段原声一样响
+    assert lv == pytest.approx(-19.0) and g < 1
+
+
+def test_noisy_live_is_still_boosted_with_warning():
+    g, lv, notes = _live_mix(-30.8, -11.4, -35.0)   # 人声只比底噪高 4.2 dB
+    assert g > 1 and lv == pytest.approx(-20.4)      # 被真峰值 -1 dBTP 卡在 +10.4 dB
+    assert any("c001" in n and "底噪" in n for n in notes)
+    assert any("c001" in n and "还差 1.4 dB" in n for n in notes)

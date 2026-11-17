@@ -52,7 +52,8 @@ RAMP_UP = int(0.8 * US)    # 旁白片：BGM 升起用的过渡（比压低慢�
 LOUD_GAP = 4 * US          # 旁白片：没有人声的空隙至少这么长，BGM 才升起来
 NORM_DIR = "旁白_归一化"    # 旁白归一化副本放在 W 下的这个目录
 NORM_TOL = 0.7             # 副本比 -16 LUFS 还低这么多 dB 才提示「太小声」
-NOISE_MIN_DB = 15.0        # 原声段：人声比底噪高不到这么多 dB 就不提升（越提越吵）
+LIVE_TARGET = -19.0        # 原声段（现场同期声）的目标响度：比旁白（-16）轻 3 dB，听起来是"在现场"
+NOISE_MIN_DB = 15.0        # 原声段：人声比底噪高不到这么多 dB 时照样提，但提醒底噪也跟着变大
 
 
 def place_subs(subs, shots):
@@ -191,11 +192,12 @@ def narration_mix(cache, narr, shots, inv, speech_json, norm_dir):
         whole = cache.measure(path, round(a, 3), round(b, 3))
         m = cache.measure(path, round(max(a, min(l["start"] for l in lines)), 3),
                           round(min(b, max(l["end"] for l in lines)), 3)) if lines else whole
-        g, short = loudness.voice_gain(m["i"], m["tp"])
+        g, short = loudness.voice_gain(m["i"], m["tp"], target=LIVE_TARGET)
         floor = min((v for _, v in whole["short"] if v > -70), default=m["i"])
         if g > 1 and m["i"] - floor < NOISE_MIN_DB:
-            g = 1.0
-            notes.append(f"原声段 {cid} 现场太吵（人声只比底噪高 {m['i'] - floor:.1f} dB），没有提升音量")
+            notes.append(f"原声段 {cid} 人声只比底噪高 {m['i'] - floor:.1f} dB：提升 {loudness.db(g):+.1f} dB 后底噪也跟着变大")
+        if short > NORM_TOL:
+            notes.append(f"原声段 {cid} 被真峰值卡住，离 {LIVE_TARGET:.0f} LUFS 还差 {short:.1f} dB")
         live_gain[cid], level["live:" + cid] = g, m["i"] + loudness.db(g)
     for s in shots:
         cid = s["clip_id"]
