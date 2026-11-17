@@ -439,3 +439,17 @@ def test_graphic_clip_uses_full_length_and_ignores_frame_scores(tmp_path):
     assert g.graphic and g.frames == [] and g.edge == 0
     assert place_pin(g, 0, g.dur) == (0, g.dur)
     assert not cam.graphic and cam.edge == EDGE and cam.frames
+
+
+def test_cover_relabels_kind_by_actual_length(capsys):      # 问题 9：cover 加长后标签跟着实际长度走
+    import random
+    from plan import Clip, place_pins, shot_kind
+    row = {"clip_id": "c1", "path": "/x/c1.mp4", "name": "c1.mp4", "shot_time": "2026-10-05T00:00:00", "duration_s": 15.2}
+    c = Clip(row, [(t * US, 0.8, 0) for t in range(16)], [])
+    shots, _, _ = place_pins({"c1": c}, 60 * US, random.Random(1),
+                             [{"clip_id": "c1", "at": 7.4, "cover": [0.94, 13.94]}], [("short", 3.0, 6.0)])
+    assert shots[0]["dur_us"] >= 13 * US and shots[0]["kind"] == "long"
+    assert shot_kind(4 * US, "short", 3, 6) == "short"          # 落在节奏位置的范围里：不改
+    assert shot_kind(7 * US, "short", 3, 6) == "mid"
+    assert shot_kind(2.5 * US, "mid", 6, 9) == "short"
+    assert shot_kind(13 * US, "mid", 6, 9) == "long"
