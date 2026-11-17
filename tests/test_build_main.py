@@ -320,3 +320,41 @@ def test_noisy_live_is_still_boosted_with_warning():
     assert g > 1 and lv == pytest.approx(-20.4)      # 被真峰值 -1 dBTP 卡在 +10.4 dB
     assert any("c001" in n and "底噪" in n for n in notes)
     assert any("c001" in n and "还差 1.4 dB" in n for n in notes)
+
+
+def test_normalize_failure_message_names_the_real_cause(tmp_path, monkeypatch):
+    import subprocess
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    bad = subprocess.CalledProcessError(1, ["ffmpeg"], "", "...\nvo.m4a: Invalid data found when processing input\n")
+    _fake_measure(monkeypatch, {"vo.m4a": (-30.0, -2.0), "a.mp4": (-30.0, -10.0)}, norm_fail=bad)
+    with pytest.raises(SystemExit) as e:
+        _run(monkeypatch, "--work", str(work), "--name", "坏", "--drafts-dir", str(drafts),
+             "--narration", str(work / "narration_track.json"))
+    assert "Invalid data found" in str(e.value) and "需要 ffmpeg" not in str(e.value)
+    _fake_measure(monkeypatch, {"vo.m4a": (-30.0, -2.0), "a.mp4": (-30.0, -10.0)}, norm_fail=FileNotFoundError("ffmpeg"))
+    with pytest.raises(SystemExit, match="没找到 ffmpeg"):
+        _run(monkeypatch, "--work", str(work), "--name", "坏", "--drafts-dir", str(drafts),
+             "--narration", str(work / "narration_track.json"))
+
+
+def test_replace_keeps_old_draft_when_normalize_fails(tmp_path, monkeypatch):
+    import subprocess
+    drafts, work, old = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    _fake_measure(monkeypatch, {"vo.m4a": (-30.0, -2.0), "a.mp4": (-30.0, -10.0)},
+                  norm_fail=subprocess.CalledProcessError(1, ["ffmpeg"]))
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, "--work", str(work), "--name", "旧草稿", "--drafts-dir", str(drafts),
+             "--narration", str(work / "narration_track.json"), "--replace")
+    assert (old / "keep.txt").exists()
+
+
+def test_missing_narration_file_is_reported_as_missing_not_ffmpeg(tmp_path, monkeypatch):
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    _fake_measure(monkeypatch, {"vo.m4a": (-30.0, -2.0), "a.mp4": (-30.0, -10.0)}, norm_fail=FileNotFoundError("vo.m4a"))
+    (tmp_path / "vo.m4a").unlink()
+    with pytest.raises(SystemExit, match="旁白文件不存在.*vo.m4a"):
+        _run(monkeypatch, "--work", str(work), "--name", "坏", "--drafts-dir", str(drafts),
+             "--narration", str(work / "narration_track.json"))

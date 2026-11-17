@@ -264,13 +264,24 @@ def place_pin(c, at, d):
     return None
 
 
+def shot_kind(d, kind, lo, hi):
+    """镜头的长 / 中 / 短标签。d：实际长度（微秒）；kind, lo, hi：节奏位置给的标签和秒数范围。
+    pin 的镜头长度可能被 cover 加长、或被素材长度截短，标签要跟着实际长度走（dry-run 的长/中/短统计、
+    rhythm_reorder 都看它）。"""
+    if lo * US <= d <= hi * US:
+        return kind
+    # 范围外按实际长度：以 mid（6–9s）的上下限为界；9–12s 的空档算 long（成片里已经显得长，
+    # 让 rhythm_reorder 也避免它和别的长镜头相连）
+    return "long" if d > 9 * US else "mid" if d >= 6 * US else "short"
+
+
 def place_pins(pool, quota, rng, pins, rhythm=RHYTHM):
     """先放必须出现的瞬间。返回 (shots, 剩余配额, 已用的节奏位置)。"""
     shots, remaining, k = [], quota, 0
     for p in pins:
         c = pool.get(p["clip_id"])
-        kind, lo, hi = rhythm[k % len(rhythm)]
-        d = min(round(rng.uniform(lo, hi) * US), remaining)
+        kind, slo, shi = rhythm[k % len(rhythm)]
+        d = min(round(rng.uniform(slo, shi) * US), remaining)
         if c is not None:
             d = min(d, c.longest_free())   # 素材比节奏要的镜头短时，按素材能给的长度放
         if c is None or d < MIN_SHOT:
@@ -304,7 +315,7 @@ def place_pins(pool, quota, rng, pins, rhythm=RHYTHM):
         k += 1
         a, d = w
         c.used.append((a, a + d))
-        shots.append({"kind": kind, "clip": c, "in_us": a, "dur_us": d,
+        shots.append({"kind": shot_kind(d, kind, slo, shi), "clip": c, "in_us": a, "dur_us": d,
                       "score": round(c.window_score(a, d) or 0, 3)})
         remaining -= d
     return shots, remaining, k

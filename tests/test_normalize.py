@@ -75,3 +75,12 @@ def test_ffmpeg_failure_raises(tmp_path, monkeypatch):
     with pytest.raises(subprocess.CalledProcessError):
         normalize(str(src), str(tmp_path / "n"), Cache(str(tmp_path)))
     assert not os.path.exists(tmp_path / "n" / "vo.wav")
+
+
+def test_copy_names_keep_previous_names():
+    from normalize import copy_names
+    # /b/vo.m4a 之前已经叫 vo；新加的 /a/vo.m4a 按路径排在前面，也不能把它挤成 vo_n2（否则要重新生成副本）
+    names = copy_names(["/b/vo.m4a", "/a/vo.m4a"], prev={"/b/vo.m4a": "vo"})
+    assert names == {"/b/vo.m4a": "vo", "/a/vo.m4a": "vo_n2"}
+    # 之前的名字被别人占了（或不再属于这个原文件名）就重新分配
+    assert copy_names(["/a/vo.m4a"], prev={"/a/vo.m4a": "other"}) == {"/a/vo.m4a": "vo"}
