@@ -426,3 +426,16 @@ def test_cover_warns_whenever_sentence_cannot_be_covered(capsys):            # I
     assert not covers and "剪断" in out
     covers, out = _cover_case((), [0.2, 6.0], capsys)                          # 句首在素材首 0.5s 内
     assert not covers and "剪断" in out
+
+
+def test_graphic_clip_uses_full_length_and_ignores_frame_scores(tmp_path):
+    from plan import EDGE, load_clips, place_pin
+    w = _work(tmp_path, [("c1", 21.0, 0), ("c2", 10.0, 0)], [])
+    _frames(tmp_path, [("c1", t, 1) for t in (0.0, 8.0, 16.0)] + [("c2", 4.0, 0)])
+    with open(os.path.join(w, "orientation.json"), "w") as f:
+        json.dump({"clips": {"c1": {"graphic": True}}}, f)
+    clips, _ = load_clips(w)
+    g, cam = clips["c1"], clips["c2"]
+    assert g.graphic and g.frames == [] and g.edge == 0
+    assert place_pin(g, 0, g.dur) == (0, g.dur)
+    assert not cam.graphic and cam.edge == EDGE and cam.frames

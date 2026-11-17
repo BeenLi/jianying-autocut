@@ -55,3 +55,16 @@ def test_plan_sees_bad_frames_written_by_orient(tmp_path):
         json.dump(build_orientation(FRAMES, bad=["c002@3"]), f)
     clips, _ = load_clips(w)
     assert clips["c002"].frames[0][2] == 1
+
+
+def test_graphic_merges_after_flip_and_unusable():
+    o = build_orientation({"c1": [1.0], "c2": [1.0], "c3": [1.0]}, flip=["c1"], unusable=["c2"],
+                          graphic=["c1", "c2", "c3"])
+    assert o["clips"]["c1"]["graphic"] and o["clips"]["c1"]["rotate"] == 180
+    assert o["clips"]["c2"]["graphic"] and o["clips"]["c2"]["unusable"]
+    assert o["clips"]["c3"] == {"graphic": True}
+
+
+def test_graphic_unknown_clip_raises():
+    with pytest.raises(ValueError, match="c9"):
+        build_orientation({"c1": [1.0]}, graphic=["c9"])

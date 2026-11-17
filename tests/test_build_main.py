@@ -123,11 +123,24 @@ def _narration(tmp_path, work, live=True, bgm_marks=()):
     return vo
 
 
-def _fake_measure(monkeypatch, levels):
+def _fake_measure(monkeypatch, levels, norm_fail=None):
+    """假测量 + 假归一化：副本 <名>.wav 的响度默认 -16 / -1.6（levels 里可单独给）。"""
+    import normalize
+    levels = {"vo.wav": (-16.0, -1.6), **levels}
+
     def m(path, start=None, end=None):
         i, tp = levels[os.path.basename(path)]
         return {"i": i, "tp": tp, "short": [(t / 10, i if t % 10 else i - 25) for t in range(0, 600)]}
+
+    def norm(path, out_dir, cache, short_s=3.0, name=None):
+        if norm_fail:
+            raise norm_fail
+        os.makedirs(out_dir, exist_ok=True)
+        out = os.path.join(out_dir, (name or os.path.splitext(os.path.basename(path))[0]) + ".wav")
+        open(out, "wb").write(b"0")
+        return out, {"type": "dynamic", "short": False}
     monkeypatch.setattr(loudness, "measure", m)
+    monkeypatch.setattr(normalize, "normalize", norm)
 
 
 def _segs(d, name):
@@ -142,15 +155,40 @@ def test_build_main_narration(tmp_path, monkeypatch, capsys):
          "--narration", str(work / "narration_track.json"))
     d = json.load(open(drafts / "旁白片" / "draft_info.json"))
     vo = _segs(d, "旁白")
-    assert len(vo) == 1 and abs(vo[0]["volume"] - 10 ** (6 / 20)) < 1e-6
+    assert len(vo) == 1 and vo[0]["volume"] == 1.0          # 副本已归一化到 -16 LUFS，剪映里不再放大
     assert vo[0]["target_timerange"] == {"start": 700000, "duration": 4000000}
+    mat = next(a for a in d["materials"]["audios"] if a["id"] == vo[0]["material_id"])
+    assert mat["path"] == str(work / "旁白_归一化" / "vo.wav") and mat["duration"] == 30000000
     video = [t for t in d["tracks"] if t["type"] == "video"][0]["segments"]
     assert abs(video[0]["volume"] - loudness.bed_gain(-30.0)) < 1e-6
     assert abs(video[1]["volume"] - loudness.voice_gain(-30.0, -10.0)[0]) < 1e-6
     texts = json.dumps(d["materials"].get("texts", []), ensure_ascii=False)
     assert "出发" in texts
     out = capsys.readouterr().out
-    assert "✓" in out and "待真机验证" in out
+    assert "✓" in out and "待真机验证" not in out      # 剪映 11.8.0 实测认 >100% 的音量（2026-11-17）
+    assert "vo.m4a -22.0 → -16.0 LUFS（限幅）" in out and str(work / "旁白_归一化") in out
+
+
+def test_narration_copy_short_of_target_reports_too_quiet(tmp_path, monkeypatch, capsys):
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    _fake_measure(monkeypatch, {"vo.m4a": (-30.0, -2.0), "vo.wav": (-25.7, -1.5), "a.mp4": (-30.0, -10.0)})
+    _run(monkeypatch, "--work", str(work), "--name", "短", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"))
+    out = capsys.readouterr().out
+    assert "太小声" in out and "9.7 dB" in out
+
+
+def test_narration_normalize_failure_exits(tmp_path, monkeypatch):           # Review Focus 3
+    import subprocess
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    for err in (subprocess.CalledProcessError(1, ["ffmpeg"]), FileNotFoundError("ffmpeg")):
+        _fake_measure(monkeypatch, {"vo.m4a": (-30.0, -2.0), "a.mp4": (-30.0, -10.0)}, norm_fail=err)
+        with pytest.raises(SystemExit, match="归一化失败.*vo.m4a"):
+            _run(monkeypatch, "--work", str(work), "--name", "坏", "--drafts-dir", str(drafts),
+                 "--narration", str(work / "narration_track.json"))
+        assert not (drafts / "坏").exists()
 
 
 def test_build_main_narration_without_bgm_or_live(tmp_path, monkeypatch):      # Review Focus 4
@@ -199,3 +237,86 @@ def test_broken_orientation_json_keeps_old_draft(tmp_path, monkeypatch):   # A4
     with pytest.raises(SystemExit, match="orientation.json"):
         _run(monkeypatch, "--work", str(work), "--name", "旧草稿", "--drafts-dir", str(drafts), "--replace")
     assert (old / "keep.txt").exists()
+
+
+def _mute_shots(work, tmp_path):
+    """两个垫底镜头：a.mp4 标了 mute，b.mp4 没标（总长和 live=False 的轨道一致）。"""
+    from common import write_csv
+    import plan
+    rows = [{"idx": 1, "chapter": 1, "chapter_title": "出发", "chapter_function": "", "kind": "narr", "name": "a.mp4",
+             "source": str(tmp_path / "a.mp4"), "in_s": 1, "dur_s": 2.5, "start_s": 0, "in_us": 1000000,
+             "dur_us": 2500000, "start_us": 0, "score": 0.5, "mute": "1"},
+            {"idx": 2, "chapter": 1, "chapter_title": "出发", "chapter_function": "", "kind": "narr", "name": "b.mp4",
+             "source": str(tmp_path / "b.mp4"), "in_s": 1, "dur_s": 2.5, "start_s": 2.5, "in_us": 1000000,
+             "dur_us": 2500000, "start_us": 2500000, "score": 0.5, "mute": ""}]
+    write_csv(str(work / "shots.csv"), rows, plan.FIELDS)
+
+
+def test_muted_narr_shot_volume_zero_even_with_volume_flag(tmp_path, monkeypatch):
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    _mute_shots(work, tmp_path)
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -6.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    _run(monkeypatch, "--work", str(work), "--name", "消音", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"), "--volume", "0.3")
+    d = json.load(open(drafts / "消音" / "draft_info.json"))
+    video = [t for t in d["tracks"] if t["type"] == "video"][0]["segments"]
+    assert [v["volume"] for v in video] == [0.0, 0.3]
+
+
+def test_muted_only_clip_bed_is_not_measured(tmp_path, monkeypatch):
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)
+    _mute_shots(work, tmp_path)
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -6.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    seen = []
+    m0 = loudness.measure
+    monkeypatch.setattr(loudness, "measure", lambda p, *a: seen.append(os.path.basename(p)) or m0(p, *a))
+    _run(monkeypatch, "--work", str(work), "--name", "消音2", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"))
+    d = json.load(open(drafts / "消音2" / "draft_info.json"))
+    video = [t for t in d["tracks"] if t["type"] == "video"][0]["segments"]
+    assert video[0]["volume"] == 0.0 and abs(video[1]["volume"] - loudness.bed_gain(-30.0)) < 1e-6
+    assert "a.mp4" not in seen
+
+
+def test_old_shots_csv_without_mute_column_builds(tmp_path, monkeypatch):      # Review Focus 1
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work, live=False)          # _narration 写的 shots.csv 没有 mute 列
+    assert "mute" not in (work / "shots.csv").read_text().splitlines()[0]
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -6.0), "a.mp4": (-30.0, -10.0)})
+    _run(monkeypatch, "--work", str(work), "--name", "旧表", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"), "--volume", "0.3")
+    d = json.load(open(drafts / "旧表" / "draft_info.json"))
+    assert [t for t in d["tracks"] if t["type"] == "video"][0]["segments"][0]["volume"] == 0.3
+
+
+class _LiveCache:
+    """narration_mix 的原声段只用 cache.measure(path, a, b)：返回固定的人声响度、真峰值和短时响度（定底噪）。"""
+    def __init__(self, i, tp, floor):
+        self.m = {"i": i, "tp": tp, "short": [(0, floor), (1, i)]}
+
+    def measure(self, path, a=None, b=None):
+        return self.m
+
+
+def _live_mix(i, tp, floor):
+    narr = {"audio": [], "live": [{"clip_id": "c001", "src_us": 0, "dur_us": 8_000_000, "start_us": 0}]}
+    inv = {"c001": {"clip_id": "c001", "path": "/x/a.mp4", "has_audio": "True"}}
+    speech = {"c001": [{"start": 0.5, "end": 7.5, "text": "x"}]}
+    _, live_gain, _, level, notes, _ = build.narration_mix(_LiveCache(i, tp, floor), narr, [], inv, speech, "/x/n")
+    return live_gain["c001"], level["live:c001"], notes
+
+
+def test_live_segments_target_minus_19():
+    g, lv, notes = _live_mix(-25.0, -10.0, -60.0)
+    assert lv == pytest.approx(-19.0) and g == pytest.approx(10 ** (6 / 20))
+    g, lv, _ = _live_mix(-18.0, -1.2, -60.0)       # 偏响的也拉到 -19，几段原声一样响
+    assert lv == pytest.approx(-19.0) and g < 1
+
+
+def test_noisy_live_is_still_boosted_with_warning():
+    g, lv, notes = _live_mix(-30.8, -11.4, -35.0)   # 人声只比底噪高 4.2 dB
+    assert g > 1 and lv == pytest.approx(-20.4)      # 被真峰值 -1 dBTP 卡在 +10.4 dB
+    assert any("c001" in n and "底噪" in n for n in notes)
+    assert any("c001" in n and "还差 1.4 dB" in n for n in notes)

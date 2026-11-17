@@ -448,7 +448,9 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     const v0 = m && (m.visuals || [])[0];
     const head = `<div class="row" style="justify-content:space-between"><h2>${esc(e.text)}</h2><span class="state ${cls === "skip" ? "" : cls}">${label}</span></div>`;
     if (!m) return head + `<p>录音里没找到这句。要么补录，要么在旁白稿里删掉它。</p>`;
-    const vis = (m.visuals || []).map(v => `<div class="card"><b class="mono">${esc(v.clip_id)}${v.at != null ? " @ " + esc(fmt(v.at)) : ""}</b>${thumbs(v.clip_id)}${S.clips[v.clip_id] && S.clips[v.clip_id].desc ? `<p class="tips">${esc(S.clips[v.clip_id].desc)}</p>` : ""}</div>`).join("");
+    // 每个画面两个勾选：允许重复用（素材已被原声段等占用也能再用）、消音（这个镜头的垫底原声关掉）
+    const flag = (v, i, f, label) => `<label><input type="checkbox" id="v${f[0]}-${id}-${i}" data-act="vflag-n" data-id="${id}" data-i="${i}" data-f="${f}" ${v[f] === true ? "checked" : ""} ${dis()}>${label}</label>`;
+    const vis = (m.visuals || []).map((v, i) => `<div class="card"><b class="mono">${esc(v.clip_id)}${v.at != null ? " @ " + esc(fmt(v.at)) : ""}</b>${thumbs(v.clip_id)}${S.clips[v.clip_id] && S.clips[v.clip_id].desc ? `<p class="tips">${esc(S.clips[v.clip_id].desc)}</p>` : ""}${e.kind === "live" ? "" : `<div class="checks">${flag(v, i, "reuse", "允许重复用")}${flag(v, i, "mute", "消音")}</div>`}</div>`).join("");
     return head + `
       <dl class="kv"><dt>录音</dt><dd class="mono">${esc(m.file || "")} ${esc(fmt(m.start))}–${esc(fmt(m.end))}</dd>
         ${m.skip_reason ? `<dt>跳过原因</dt><dd>${esc(m.skip_reason)}</dd>` : ""}
@@ -682,8 +684,23 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         return;
       }
       clearDrafts(new RegExp(`^n-(clip|at)-${id}$`));
-      write("nmatch/" + id, { visuals: [at === null ? { clip_id: clip } : { clip_id: clip, at }], confirmed: true, by: "user",
-        confidence: null, reason: "" });
+      // 同一素材只改时间：保留「允许重复用」「消音」；换了素材就清空
+      const v0 = ((S.nmatch[id] || {}).visuals || [])[0], nv = { clip_id: clip };
+      if (at !== null) nv.at = at;
+      if (v0 && v0.clip_id === clip) for (const f of ["reuse", "mute"]) if (v0[f] === true) nv[f] = true;
+      write("nmatch/" + id, { visuals: [nv], confirmed: true, by: "user", confidence: null, reason: "" });
+    },
+    "vflag-n": el => {
+      const id = el.dataset.id, i = +el.dataset.i, f = el.dataset.f, m = S.nmatch[id];
+      if (!m || !["reuse", "mute"].includes(f)) return;
+      // 不勾就删掉字段，不写 false / undefined（旧数据本来就没有这两个字段）
+      const visuals = (m.visuals || []).map((v, k) => {
+        if (k !== i) return v;
+        const n = { ...v };
+        if (el.checked) n[f] = true; else delete n[f];
+        return n;
+      });
+      write("nmatch/" + id, { visuals, by: "user" });
     },
     "retime-n": el => {
       const id = el.dataset.id, a = num(val(`n-start-${id}`)), b = num(val(`n-end-${id}`));
@@ -705,7 +722,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
 
   app.addEventListener("click", e => {
     const el = e.target.closest("[data-act]");
-    if (!el || el.dataset.act === "done" || el.dataset.act === "note") return;
+    if (!el || el.dataset.act === "done" || el.dataset.act === "note" || el.dataset.act === "vflag-n") return;
     if (el.dataset.act !== "toggle" && el.dataset.act !== "view" && el.dataset.act !== "sel") retryFailed();
     actions[el.dataset.act] && actions[el.dataset.act](el);
   });
@@ -728,6 +745,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   app.addEventListener("change", e => {
     const el = e.target;
     if (el.dataset.act === "done") { retryFailed(); actions.done(el); return; }
+    if (el.dataset.act === "vflag-n") { retryFailed(); actions["vflag-n"](el); return; }
     if (el.id) S.drafts[el.id] = el.type === "checkbox" ? (el.checked ? "1" : "") : el.value;
     if (el.dataset.act === "note") saveNote(el.dataset.id);
   });

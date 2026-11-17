@@ -21,10 +21,11 @@ import json
 import os
 import re
 import sys
+from contextlib import nullcontext
 from dataclasses import dataclass, fields
 
 from common import US, load_json
-from plan import EDGE, MIN_SHOT, fmt, load_clips, pick_one, place_pin, write_shots
+from plan import MIN_SHOT, fmt, load_clips, pick_one, place_pin, write_shots
 
 RESTART_WORDS = ("重来", "不对", "再来一遍")
 RETAKE_RATIO = 0.8       # 两句相似到这个程度，就当作同一句录了两遍
@@ -37,6 +38,7 @@ SPLIT_GAIN = 0.05        # 和前一段拼起来比单独更像稿子这么多�
 OVERLAP_TOL = 0.3        # 相邻两句在源文件里重叠不超过这么多秒（Whisper 边界误差）仍算连续
 BGM_MODES = ("up", "drop")
 TALK_PENALTY = 0.5       # 素材里对镜说话的区间，挑画面时得分乘这个系数（免得画面张嘴、声音是旁白）
+NUDGE_MAX = int(0.1 * US)  # 一槽末尾剩下不到这么长、下一槽是旁白句时，分界线提前挤给下一句
 SUB_MAX = 16             # 每条字幕最多这么多字
 SUB_BREAK = "，。！？；、,.!?;"
 
@@ -111,6 +113,9 @@ def validate(plan, clip_durs, file_durs):
                 errs.append(f"{iid}：end {end}s 超出旁白文件长度 {file_durs[fid]}s")
             for v in it.get("visuals", []):
                 cid = v.get("clip_id") if isinstance(v, dict) else None
+                for f in ("reuse", "mute"):
+                    if isinstance(v, dict) and f in v and not isinstance(v[f], bool):
+                        errs.append(f"{iid}：visuals 的 {f} 要写 true / false，现在是 {v[f]!r}")
                 if cid not in clip_durs:
                     errs.append(f"{iid}：素材 {cid} 不在 inventory 里")
                 elif v.get("at") is not None and not isinstance(v["at"], (int, float)):
@@ -453,8 +458,9 @@ class _Penalty:
         self.clip.frames = self.orig
 
 
-def _try_place(c, at, d, speech):
-    """在素材 c 里放一个长 d 的镜头：有 at 以它为中心，没有就取得分最高的窗口。成功则占用并返回 (a, score)。"""
+def _try_place(c, at, d, speech, reuse=False):
+    """在素材 c 里放一个长 d 的镜头：有 at 以它为中心，没有就取得分最高的窗口。成功则占用并返回 (a, score)。
+    reuse=True 时调用方已在 c.unconstrained() 里，占用记进 reuse_used。"""
     with _Penalty(c, speech.get(c.clip_id)):
         if at is not None:
             w = place_pin(c, round(float(at) * US), d)
@@ -467,17 +473,18 @@ def _try_place(c, at, d, speech):
                 return None
             a = w[0]
         score = c.window_score(a, d)
-    c.used.append((a, a + d))
+    (c.reuse_used if reuse else c.used).append((a, a + d))
     return a, round(score or 0, 3)
 
 
-def _place_in_free_segment(c, d):
+def _place_in_free_segment(c, d, reuse=False):
     """把长 d 的镜头放进素材 c 最长的空闲段（居中）。空闲段起点常不在 STEP 网格上，best_window 会错过它。"""
-    segs, cur = [], EDGE
-    for u0, u1 in sorted(c.used):
+    occ = c.reuse_used if reuse else c.used
+    segs, cur = [], c.edge
+    for u0, u1 in sorted(occ):
         segs.append((cur, u0 - c.gap - cur))
         cur = u1 + c.gap
-    segs.append((cur, c.dur - EDGE - cur))
+    segs.append((cur, c.dur - c.edge - cur))
     a, length = max(segs, key=lambda x: x[1])
     if length < d:
         return None
@@ -485,30 +492,40 @@ def _place_in_free_segment(c, d):
     score = c.window_score(a, d)
     if score is None or not c.free(a, d):
         return None
-    c.used.append((a, a + d))
+    occ.append((a, a + d))
     return a, round(score, 3)
 
 
-def _place_any(cands, clips, avoid, remaining, speech, partial, last=False):
+def _place_any(cands, clips, avoid, remaining, speech, partial, last=False, soft=frozenset(), can_nudge=False):
     """按顺序在候选画面里放一个镜头。partial=False 要整块盖住 remaining；partial=True 取素材里最长的空闲段
     （至少 MIN_SHOT）。last=True（本槽最后一块）时不留不足 MIN_SHOT 的零头：零头没有下一块可挪。
-    返回镜头 dict，放不下返回 None。"""
+    返回镜头 dict，放不下返回 None。
+    v["reuse"] 的画面不管素材已被占用的区间（只和别的 reuse 镜头避让），avoid 里属于 soft 的素材
+    （紧跟的原声段用的素材）对它不算数；前一个镜头的同素材仍然避开。"""
     for v in cands:
         c = clips.get(v["clip_id"])
-        if c is None or c.clip_id in avoid:
+        reuse = bool(v.get("reuse"))
+        if c is None or c.clip_id in (avoid - soft if reuse else avoid):
             continue
-        d = remaining
-        if partial:
-            d = min(c.longest_free(), remaining)
-            if last and 0 < remaining - d < MIN_SHOT:
-                d = remaining - MIN_SHOT
-            if d < MIN_SHOT:
-                continue
-        w = _try_place(c, v.get("at"), d, speech)
-        if not w and partial:
-            w = _place_in_free_segment(c, d)          # 以 at 为中心 / 网格上都放不下：直接放进最长的空闲段
+        with c.unconstrained() if reuse else nullcontext():
+            d = remaining
+            if partial:
+                d = min(c.longest_free(), remaining)
+                # 不足 NUDGE_MAX 的零头、且下一槽是旁白句（can_nudge）：留给 layout 挤进下一句，不为它缩短这块
+                if last and 0 < remaining - d < MIN_SHOT and not (can_nudge and remaining - d < NUDGE_MAX):
+                    d = remaining - MIN_SHOT
+                if d < MIN_SHOT:
+                    continue
+            w = _try_place(c, v.get("at"), d, speech, reuse)
+            if not w and partial:
+                w = _place_in_free_segment(c, d, reuse)   # 以 at 为中心 / 网格上都放不下：直接放进最长的空闲段
         if w:
-            return {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1]}
+            shot = {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1]}
+            if reuse:
+                shot["reuse"] = True
+            if v.get("mute"):
+                shot["mute"] = True
+            return shot
     return None
 
 
@@ -517,9 +534,12 @@ def _extend(shot, extra, head=False):
     extra 为负就是剪短（总是可行，只要剩下的不短于 0）。"""
     c, a, d = shot["clip"], shot["in_us"], shot["dur_us"]
     na, nd = (a - extra if head else a), d + extra
-    c.used.remove((a, a + d))
-    ok = nd > 0 and EDGE <= na and na + nd <= c.dur - EDGE and c.free(na, nd) and c.window_score(na, nd) is not None
-    c.used.append((na, na + nd) if ok else (a, a + d))
+    reuse = bool(shot.get("reuse"))
+    occ = c.reuse_used if reuse else c.used
+    occ.remove((a, a + d))
+    with c.unconstrained() if reuse else nullcontext():
+        ok = nd > 0 and c.edge <= na and na + nd <= c.dur - c.edge and c.free(na, nd) and c.window_score(na, nd) is not None
+    occ.append((na, na + nd) if ok else (a, a + d))
     if ok:
         shot["in_us"], shot["dur_us"] = na, nd
     return ok
@@ -612,8 +632,16 @@ def layout(plan, clips, speech, silences, file_durs, opts):
             if not vis:
                 report["unpaired"].append(it["id"])
             # 原声段的画面就是用户给的那段声音，不能延长（会把范围外的原声以人声音量带进旁白）
-            if prev_shot["kind"] != "live" and prev_shot["clip"].clip_id != next_live and _extend(prev_shot, L):
-                continue
+            if prev_shot["kind"] != "live" and prev_shot["clip"].clip_id != next_live:
+                if _extend(prev_shot, L):
+                    continue
+                # 素材只差不到 NUDGE_MAX 就到头（21.0s 的地图延续到 21.031s）：延长到头，零头挤给下一句
+                c = prev_shot["clip"]
+                short = prev_shot["in_us"] + prev_shot["dur_us"] + L - (c.dur - c.edge)
+                if 0 < short < NUDGE_MAX and k + 1 < len(sl) and not sl[k + 1]["live"] and _extend(prev_shot, L - short):
+                    s["end_us"] -= short
+                    sl[k + 1]["start_us"] -= short
+                    continue
         j = line_slots.index(k)
         # 借来的画面不带原句的 at：那一刻是原句自己要用的，借用只取素材里还空着的地方
         neighbours = [{"clip_id": v["clip_id"]} for jj in (j - 1, j + 1) if 0 <= jj < len(line_slots)
@@ -628,17 +656,20 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                 avoid = {last["clip"].clip_id} if last else set()
                 if i == len(pieces) - 1 and next_live:
                     avoid.add(next_live)
+                # reuse 画面可以紧挨着用同素材的原声段（但仍不和前一个镜头同素材）
+                soft = frozenset({next_live} - {last["clip"].clip_id if last else None}) if next_live else frozenset()
                 own = ([vis[i]] if i < len(vis) else []) + [v for v in vis if v is not (vis[i] if i < len(vis) else None)]
                 others = [clips[c] for c in pool.get(it["chapter"], []) if c not in avoid]
                 # 先找能整块盖住的；素材都比这块短时，放得下多少放多少，剩下的交给下一个候选。
                 # 本块指定的画面最优先，其次本句别的画面，最后才是借来的（相邻句的画面、本章出现过的素材）
                 tail = i == len(pieces) - 1
+                nudge_ok = tail and k + 1 < len(sl) and not sl[k + 1]["live"]
 
-                def place(rem, avoid=avoid, own=own, others=others, tail=tail):
-                    p_ = (_place_any(own[:1], clips, avoid, rem, speech, False)
-                          or _place_any(own[:1], clips, avoid, rem, speech, True, tail)
-                          or _place_any(own[1:], clips, avoid, rem, speech, False)
-                          or _place_any(own[1:], clips, avoid, rem, speech, True, tail)
+                def place(rem, avoid=avoid, own=own, others=others, tail=tail, soft=soft, nudge_ok=nudge_ok):
+                    p_ = (_place_any(own[:1], clips, avoid, rem, speech, False, soft=soft)
+                          or _place_any(own[:1], clips, avoid, rem, speech, True, tail, soft, nudge_ok)
+                          or _place_any(own[1:], clips, avoid, rem, speech, False, soft=soft)
+                          or _place_any(own[1:], clips, avoid, rem, speech, True, tail, soft, nudge_ok)
                           or _place_any(neighbours, clips, avoid, rem, speech, False))
                     pool_ = [c for c in others if c.clip_id not in avoid]
                     if p_ is None:
@@ -647,7 +678,7 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                         if p_ is not None:
                             p_["kind"] = "narr"
                     return p_ or _place_any(neighbours + [{"clip_id": c.clip_id} for c in pool_],
-                                            clips, avoid, rem, speech, True, tail)
+                                            clips, avoid, rem, speech, True, tail, soft, nudge_ok)
                 placed = place(remaining)
                 if placed is None:
                     raise ValueError(f"章节 {it['chapter']}（{it['id']}）没有可用的素材来铺这句旁白："
@@ -664,6 +695,11 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                         remaining = 0
                     elif i + 1 < len(pieces):
                         pieces[i + 1] += remaining
+                        remaining = 0
+                    elif remaining < NUDGE_MAX and k + 1 < len(sl) and not sl[k + 1]["live"]:
+                        # 微小零头（如 21.0s 的地图配 21.031s 的槽）：分界线提前，挤给下一句，不为它切一刀
+                        s["end_us"] -= remaining
+                        sl[k + 1]["start_us"] -= remaining
                         remaining = 0
                     else:
                         cut = MIN_SHOT - remaining
@@ -688,14 +724,16 @@ def layout(plan, clips, speech, silences, file_durs, opts):
         it = items[s["item"]]
         report["items"].append({"item": it["id"], "start_us": s["start_us"], "end_us": s["end_us"],
                                 "text": it.get("text", it.get("reason", "")), "live": s["live"],
-                                "shots": [(sh["clip"].clip_id, sh["in_us"], sh["dur_us"]) for sh in shots.get(k, [])]})
+                                "shots": [(sh["clip"].clip_id, sh["in_us"], sh["dur_us"],
+                                           {f: True for f in ("reuse", "mute") if sh.get(f)})
+                                          for sh in shots.get(k, [])]})
         for sh in shots.get(k, []):
             c = sh["clip"]
             rows.append({"idx": len(rows) + 1, "chapter": ch_no[it["chapter"]], "chapter_title": ch_title[it["chapter"]],
                          "chapter_function": "", "kind": sh["kind"], "name": c.name, "source": c.path,
                          "in_s": round(sh["in_us"] / US, 3), "dur_s": round(sh["dur_us"] / US, 3),
                          "start_s": round(t / US, 3), "in_us": sh["in_us"], "dur_us": sh["dur_us"],
-                         "start_us": t, "score": sh["score"]})
+                         "start_us": t, "score": sh["score"], "mute": "1" if sh.get("mute") else ""})
             t += sh["dur_us"]
     track = {"audio": [dict(a, file=plan["files"][a["fid"]]) for a in tl["audio"]],
              "subs": [], "speech": [], "live": [], "bgm": [], "total_us": tl["total_us"]}
@@ -757,8 +795,9 @@ def _print_report(plan, rows, track, report, notes):
         print(f"  {fmt(e['start_us'])}–{fmt(e['end_us'])} {e['item']} {tag}「{e['text'][:24]}」")
         if not e["live"] and not e["shots"]:
             print("      （延续上一镜头）")
-        for cid, a, d in e["shots"]:
-            print(f"      {cid}@{a / US:.1f}s +{d / US:.1f}s  {note_at(notes, cid, (a + d / 2) / US)[:30]}")
+        for cid, a, d, flags in e["shots"]:
+            tag = ("（重复用）" if flags.get("reuse") else "") + ("（消音）" if flags.get("mute") else "")
+            print(f"      {cid}@{a / US:.1f}s +{d / US:.1f}s{tag}  {note_at(notes, cid, (a + d / 2) / US)[:30]}")
     for iid, why in report["skipped"]:
         print(f"  跳过 {iid}「{items[iid].get('text', '')[:20]}」：{why}")
     for iid, cid in report["fallback"]:

@@ -192,11 +192,11 @@ from narrate import layout, main, slots, split_sub
 from plan import Clip
 
 
-def _clip(cid, dur, bad=False, score=0.8):
+def _clip(cid, dur, bad=False, score=0.8, graphic=False):
     row = {"clip_id": cid, "path": f"/x/{cid}.mp4", "name": f"{cid}.mp4", "shot_time": "2026-10-05T00:00:00",
            "duration_s": dur}
     frames = [(t * US, score, int(bad)) for t in range(int(dur))]
-    return Clip(row, frames, [])
+    return Clip(row, frames, [], graphic)
 
 
 def _clips(*specs):
@@ -677,3 +677,155 @@ def test_layout_never_leaves_a_sub_two_second_shot():                # I1：审�
                 bad += [(c2d, L, r["name"], r["dur_us"]) for r in short]
             bad += [(c2d, L, "相邻", a["name"]) for a, b in zip(rows, rows[1:]) if a["name"] == b["name"]]
     assert bad == []
+
+
+# ---------- 零头挤给下一句 ----------
+# A 的槽长 = end + 1.8s：19.231 → 21.031s，比 21.0s 的图形素材 g 长 31ms
+
+def _nudge_clips():
+    return {"g": _clip("g", 21.0, graphic=True), "c2": _clip("c2", 60), "c7": _clip("c7", 60)}
+
+
+def test_tiny_remainder_is_nudged_into_next_line():
+    from plan import MIN_SHOT
+    items = [_line("A", 1.0, 19.231, visuals=_vis("g")), _line("B", 2.0, 8.0, file="n2", visuals=_vis("c2"))]
+    rows, track, rep = _lay(items, _nudge_clips())
+    _rows_ok(rows, track["total_us"])
+    a, b = rep["items"]
+    assert a["shots"] and [s[0] for s in a["shots"]] == ["g"] and a["shots"][0][2] == us(21.0)
+    assert a["end_us"] == b["start_us"] == us(21.0)
+    assert rows[1]["start_us"] == us(21.0) and rows[1]["source"] == "/x/c2.mp4"
+    assert all(r["dur_us"] >= MIN_SHOT for r in rows)
+
+
+def test_no_nudge_before_live_or_at_end():               # Review Focus 2
+    from plan import MIN_SHOT
+    # 原声段前的槽到原声段（含片头延伸）开始为止：A 的结尾调到让槽长 21.031s
+    cases = [[_line("A", 1.0, 20.431, visuals=_vis("g", "c2")), _live("V", "c7", 30.0, 35.0)],
+             [_line("A", 1.0, 19.231, visuals=_vis("g", "c2"))]]
+    for items in cases:
+        rows, track, rep = _lay(items, _nudge_clips())
+        _rows_ok(rows, track["total_us"])
+        plan = _plan(*items)
+        sl = slots(timeline(plan, {}, {"n1": 60.0, "n2": 60.0}, Opts()), plan, Opts())
+        assert [(e["start_us"], e["end_us"]) for e in rep["items"]] == [(x["start_us"], x["end_us"]) for x in sl]
+        assert all(r["dur_us"] >= MIN_SHOT for r in rows)
+
+
+# ---------- visuals.reuse ----------
+
+def _span(rep, iid):
+    return [s for e in rep["items"] if e["item"] == iid for s in e["shots"]]
+
+
+def test_reuse_visual_ignores_live_occupancy():
+    clips = _clips(("c022", 30), ("c2", 60))
+    items = [_line("L", 1.0, 4.0, visuals=[{"clip_id": "c022", "reuse": True}]), _live("V", "c022", 0.5, 29.5)]
+    rows, track, rep = _lay(items, clips, tail=0)
+    _rows_ok(rows, track["total_us"])
+    assert [s[0] for s in _span(rep, "L")] == ["c022"]
+    assert clips["c022"].used == [(us(0.5), us(29.5))]
+    _, a, d = _span(rep, "L")[0][:3]
+    assert (a, a + d) in clips["c022"].reuse_used
+
+
+def test_reuse_does_not_allow_adjacent_with_previous_shot():
+    items = [_line("A", 1.0, 4.0, visuals=_vis("c1")),
+             _line("B", 6.0, 9.0, visuals=[{"clip_id": "c1", "reuse": True}, {"clip_id": "c2"}])]
+    rows, track, rep = _lay(items, _clips(("c1", 60), ("c2", 60)))
+    assert _span(rep, "B")[0][0] != "c1"
+    srcs = [r["source"] for r in rows]
+    assert all(x != y for x, y in zip(srcs, srcs[1:]))
+
+
+def test_two_reuse_visuals_of_same_clip_do_not_overlap():
+    clips = _clips(("c1", 30), ("c2", 60))
+    items = [_line("L1", 1.0, 4.0, visuals=[{"clip_id": "c1", "reuse": True}]),
+             _line("L2", 6.0, 9.0, visuals=_vis("c2")),
+             _line("L3", 11.0, 14.0, visuals=[{"clip_id": "c1", "reuse": True}]),
+             _live("V", "c1", 0.5, 29.5)]
+    rows, track, rep = _lay(items, clips, tail=0)
+    _rows_ok(rows, track["total_us"])
+    (c_a, a, da), (c_b, b, db) = _span(rep, "L1")[0][:3], _span(rep, "L3")[0][:3]
+    assert c_a == c_b == "c1"
+    assert a + da <= b or b + db <= a
+    assert clips["c1"].used == [(us(0.5), us(29.5))]
+
+
+def test_remainder_merges_into_reuse_shot_without_error():
+    # L2 太短、没配画面：延长上一个镜头（L1 的 reuse 镜头）。c1 整段被最后的原声段 V0 占着
+    clips = _clips(("c1", 30), ("c2", 60), ("c3", 60))
+    items = [_line("L1", 1.0, 4.0, visuals=[{"clip_id": "c1", "reuse": True}]), _line("L2", 4.4, 5.0),
+             _live("V", "c2", 10.0, 15.0), _line("L3", 6.0, 9.0, visuals=_vis("c3")), _live("V0", "c1", 1.0, 29.0)]
+    rows, track, rep = _lay(items, clips, tail=0)
+    _rows_ok(rows, track["total_us"])
+    assert [s[0] for s in _span(rep, "L1")] == ["c1"] and _span(rep, "L2") == []
+    assert clips["c1"].used == [(us(1.0), us(29.0))] and len(clips["c1"].reuse_used) == 1
+
+
+def test_reuse_visual_on_graphic_clip_starts_at_zero():      # Review Focus 5
+    clips = {"g": _clip("g", 12.0, graphic=True), "c2": _clip("c2", 60)}
+    items = [_line("L", 1.0, 3.0, visuals=[{"clip_id": "g", "at": 0, "reuse": True}]), _live("V", "g", 0.0, 12.0)]
+    rows, track, rep = _lay(items, clips, tail=0)
+    _rows_ok(rows, track["total_us"])
+    assert _span(rep, "L")[0][:2] == ("g", 0)
+    assert clips["g"].used == [(0, us(12.0))]
+
+
+def test_validate_rejects_non_bool_reuse_and_mute():
+    plan = _plan(_line("L1", 0, 1, visuals=[{"clip_id": "c001", "reuse": "yes"}, {"clip_id": "c001", "mute": 1}]))
+    errs, _ = validate(plan, {"c001": 100.0}, {"n1": 60.0})
+    assert any("reuse 要写 true / false" in e for e in errs) and any("mute 要写 true / false" in e for e in errs)
+
+
+# ---------- visuals.mute ----------
+
+def test_mute_flag_reaches_shot_rows_and_dry_run(tmp_path, capsys):
+    items = [_line("L1", 1.0, 3.0, visuals=[{"clip_id": "c1", "mute": True}]), _line("L2", 6.0, 8.0, visuals=_vis("c2")),
+             _line("L3", 11.0, 13.0, visuals=_vis("c1"))]
+    rows, _, rep = _lay(items, _clips(("c1", 60), ("c2", 60)))
+    assert [r["mute"] for r in rows] == ["1", "", ""]
+    assert rep["items"][0]["shots"][0][3] == {"mute": True} and rep["items"][1]["shots"][0][3] == {}
+    w = _work(tmp_path)
+    p = json.loads((tmp_path / "narration_plan.json").read_text())
+    p["items"][0]["visuals"] = [{"clip_id": "c1", "mute": True}]
+    (tmp_path / "narration_plan.json").write_text(json.dumps(p))
+    assert main(["--work", w, "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "（消音）" in out and out.count("（消音）") == 1
+
+
+def test_reuse_flag_shown_in_dry_run(tmp_path, capsys):
+    w = _work(tmp_path)
+    p = json.loads((tmp_path / "narration_plan.json").read_text())
+    p["items"][0]["visuals"] = [{"clip_id": "c1", "reuse": True}]
+    (tmp_path / "narration_plan.json").write_text(json.dumps(p))
+    assert main(["--work", w, "--dry-run"]) == 0
+    assert "（重复用）" in capsys.readouterr().out
+
+
+def test_tiny_remainder_nudged_when_empty_lines_continue_graphic():
+    # 枸杞岛：L28 配 21.0s 的地图 g，L29、L30 留空延续；三句的槽合起来比 g 长 31ms，后面紧跟一句旁白
+    from plan import MIN_SHOT
+    items = [_line("L28", 1.0, 8.0, visuals=[{"clip_id": "g", "at": 0}]), _line("L29", 8.4, 15.0),
+             _line("L30", 15.4, 19.431), _line("B", 2.0, 8.0, file="n2", visuals=_vis("c2"))]
+    plan = _plan(*items)
+    sl = slots(timeline(plan, {}, {"n1": 60.0, "n2": 60.0}, Opts()), plan, Opts())
+    assert sl[3]["start_us"] == us(21.031)
+    rows, track, rep = _lay(items, _nudge_clips())
+    _rows_ok(rows, track["total_us"])
+    assert [(r["source"], r["dur_us"]) for r in rows[:1]] == [("/x/g.mp4", us(21.0))]
+    assert rows[1]["source"] == "/x/c2.mp4" and rows[1]["start_us"] == us(21.0)
+    assert all(r["dur_us"] >= MIN_SHOT for r in rows)
+
+
+def test_no_sliver_when_remainder_cannot_be_nudged():
+    # 本块指定的素材只差 50ms 盖不住，下一槽是原声段 / 本槽是最后一槽：不能挤，也不能留下 50ms 的镜头
+    from plan import MIN_SHOT
+    cases = [[_line("A", 1.0, 2.45, visuals=_vis("c1", "c9")), _live("V", "c7", 30.0, 35.0)],
+             [_line("A", 0.1, 0.25, visuals=_vis("c1", "c9"))]]
+    for items in cases:
+        rows, track, rep = _lay(items, {"c1": _clip("c1", 4.0), "c9": _clip("c9", 60), "c7": _clip("c7", 60)})
+        _rows_ok(rows, track["total_us"])
+        assert rep["items"][0]["end_us"] - rep["items"][0]["start_us"] == us(3.05)
+        assert all(r["dur_us"] >= MIN_SHOT for r in rows), [(r["name"], r["dur_us"]) for r in rows]
