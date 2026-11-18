@@ -12,6 +12,7 @@ narration_plan.json 里的写法（都可省，没有时行为不变）：
 type 是剪映里的中文显示名，查 assets/fx_catalog.json（fx_catalog.py 生成）。
 """
 import difflib
+import hashlib
 import json
 import math
 import os
@@ -104,3 +105,103 @@ def validate_fx(plan, catalog):
     if n_fx > FX_MAX_EFFECTS:
         warns.append(f"特效 {n_fx} 个，超过建议的 {FX_MAX_EFFECTS} 个：只留给高潮瞬间")
     return errs, warns
+
+
+# ---------- 排完镜头之后：算出每个效果落在哪 ----------
+
+def shots_sig(rows):
+    """shots 的指纹：idx、kind、source、in_us、start_us、dur_us 按顺序拼起来取 sha1。
+    narrate 的整数行和 read_csv 读出来的字符串行算出来一样；build 用它确认 track 和 shots.csv 出自同一次 narrate。"""
+    text = "\n".join(f"{int(r['idx'])}|{r['kind']}|{r['source']}|{int(r['in_us'])}|{int(r['start_us'])}|{int(r['dur_us'])}"
+                     for r in rows)
+    return "sha1:" + hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
+def _s(us):
+    return f"{us / US:g}s"
+
+
+def compute_fx(plan, rows, srcs, slots, catalog):
+    """(fx | None, warns, notes)。rows / srcs / slots 是 layout 的最终结果（srcs 与 rows 一一对应）。
+    notes：item_id → ["转场 叠化 0.6s", …]，给 dry-run 打印。一个生效的效果都没有时 fx 是 None。"""
+    items = {it["id"]: it for it in plan.get("items", [])}
+    warns, notes = [], {}
+    first = {}
+    for r, s in enumerate(srcs):
+        first.setdefault(s["item"], r)
+
+    def note(iid, text):
+        notes.setdefault(iid, []).append(text)
+
+    out = {"transitions": [], "effects": [], "filters": []}
+    for sl in slots:
+        iid = sl["item"]
+        it = items[iid]
+        tr = it.get("transition")
+        if tr:
+            e = catalog["transition"][tr["type"]]
+            r = first.get(iid)
+            if not r:      # None：这一项没有自己的镜头；0：它就是全片第一个镜头（校验已拦住，兜底）
+                warns.append(f"{iid}：没有自己的镜头（槽太短，被上一句延长吞掉了），转场 {tr['type']} 忽略")
+            else:
+                d = round(tr["dur"] * US) if "dur" in tr else round(e["dur"] * US)
+                lim = min(int(rows[r - 1]["dur_us"]), int(rows[r]["dur_us"])) // 2
+                if d > lim:
+                    warns.append(f"{iid}：转场 {tr['type']} {_s(d)} 比两侧较短镜头的一半长，截到 {_s(lim)}")
+                    d = lim
+                if d < FX_MIN_US:
+                    warns.append(f"{iid}：转场 {tr['type']} 截短后只有 {_s(d)}，太短，忽略")
+                else:
+                    out["transitions"].append({"shot": int(rows[r - 1]["idx"]), "at_us": int(rows[r]["start_us"]),
+                                               "type": tr["type"], "dur_us": d, "item": iid, "vip": e["vip"]})
+                    note(iid, f"转场 {tr['type']} {_s(d)}")
+        ef = it.get("effect")
+        if ef:
+            out["effects"].append({"start_us": sl["start_us"], "dur_us": sl["end_us"] - sl["start_us"], "type": ef["type"],
+                                   "item": iid, "vip": catalog["effect"][ef["type"]]["vip"]})
+            note(iid, f"特效 {ef['type']}")
+        for i, v in enumerate(it.get("visuals") or []):
+            fl = v.get("filter") if isinstance(v, dict) else None
+            if not fl:
+                continue
+            mine = [r for r, s in enumerate(srcs) if s["item"] == iid and s["vis"] == i]
+            if not mine:
+                used = [rows[r]["source"] for r, s in enumerate(srcs) if s["item"] == iid]
+                if not used:
+                    why = "这句没有自己的镜头（被上一句延长吞掉了）"
+                else:
+                    names = "、".join(dict.fromkeys(os.path.splitext(os.path.basename(p))[0] for p in used))
+                    why = f"第 {i + 1} 个画面 {v.get('clip_id')} 没用上（这句用的是 {names}）"
+                warns.append(f"{iid}：{why}，滤镜 {fl['type']} 忽略")
+                continue
+            x = fl.get("intensity", 100)
+            for r in mine:
+                out["filters"].append({"shot": int(rows[r]["idx"]), "start_us": int(rows[r]["start_us"]), "type": fl["type"],
+                                       "intensity": x, "item": iid, "vip": catalog["filter"][fl["type"]]["vip"]})
+            note(iid, f"滤镜 {fl['type']} {x:g}")
+    if rows:
+        both = len(rows) == 1 and plan.get("intro") and plan.get("outro")
+        for kind, r in (("intro", 0), ("outro", len(rows) - 1)):
+            a = plan.get(kind)
+            if not a:
+                continue
+            e = catalog[kind][a["type"]]
+            d, lim = round(e["dur"] * US), int(rows[r]["dur_us"]) // (2 if both else 1)
+            if d > lim:
+                warns.append(f"{LABEL[kind]} {a['type']} {_s(d)} 比镜头长，截到 {_s(lim)}")
+                d = lim
+            if d < FX_MIN_US:
+                warns.append(f"{LABEL[kind]} {a['type']} 截短后只有 {_s(d)}，太短，忽略")
+                continue
+            out[kind] = {"shot": int(rows[r]["idx"]), "type": a["type"], "dur_us": d, "vip": e["vip"]}
+            note(srcs[r]["item"], f"{LABEL[kind]} {a['type']} {_s(d)}")
+    if not any(out[k] for k in out):
+        return None, warns, notes
+    return {"shots_sig": shots_sig(rows), **out}, warns, notes
+
+
+def vip_list(fx):
+    """会员项：["星光叠化（L11）", "片头 xx"]。"""
+    out = [f"{e['type']}（{e['item']}）" for k in ("transitions", "effects", "filters") for e in fx.get(k, []) if e.get("vip")]
+    out += [f"{LABEL[k]} {fx[k]['type']}" for k in ("intro", "outro") if fx.get(k, {}).get("vip")]
+    return list(dict.fromkeys(out))

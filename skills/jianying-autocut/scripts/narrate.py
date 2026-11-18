@@ -809,7 +809,7 @@ def note_at(notes, cid, t_s):
     return ""
 
 
-def _print_report(plan, rows, track, report, notes):
+def _print_report(plan, rows, track, report, notes, fx_notes=None):
     items = {it["id"]: it for it in plan["items"]}
     print(f"成片 {fmt(track['total_us'])}，{len(rows)} 个镜头，旁白 {len(track['audio'])} 段，原声段 {len(track['live'])} 个")
     for e in report["items"]:
@@ -820,6 +820,8 @@ def _print_report(plan, rows, track, report, notes):
         for cid, a, d, flags in e["shots"]:
             tag = ("（重复用）" if flags.get("reuse") else "") + ("（消音）" if flags.get("mute") else "")
             print(f"      {cid}@{a / US:.1f}s +{d / US:.1f}s{tag}  {note_at(notes, cid, (a + d / 2) / US)[:30]}")
+        for x in (fx_notes or {}).get(e["item"], []):
+            print(f"      ⤷ {x}")
     for iid, why in report["skipped"]:
         print(f"  跳过 {iid}「{items[iid].get('text', '')[:20]}」：{why}")
     for iid, cid in report["fallback"]:
@@ -828,6 +830,9 @@ def _print_report(plan, rows, track, report, notes):
         print(f"  ⚠ 没配画面、延续上一个镜头的句子：{'、'.join(report['unpaired'])}")
     for w in report["warns"]:
         print(f"  ⚠ {w}")
+    vip = fx.vip_list(track["fx"]) if track.get("fx") else []
+    if vip:
+        print(f"  会员：{'、'.join(vip)}")
 
 
 def main(argv=None):
@@ -876,8 +881,14 @@ def main(argv=None):
         print(str(e), file=sys.stderr)
         return 1
     report["warns"] = warns + report["warns"]
+    fx_notes = {}
+    if fx.has_fx(plan):    # 校验时已经读通过目录
+        fxd, fx_warns, fx_notes = fx.compute_fx(plan, rows, report["srcs"], report["slots"], fx.load_catalog())
+        report["warns"] += fx_warns
+        if fxd is not None:
+            track["fx"] = fxd
     notes = _load(os.path.join(W, "scene_notes.json"), {}) or {}
-    _print_report(plan, rows, track, report, notes)
+    _print_report(plan, rows, track, report, notes, fx_notes)
     if args.dry_run:
         print("（dry-run，没写文件）")
         return 0

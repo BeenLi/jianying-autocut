@@ -111,3 +111,197 @@ def test_load_catalog_missing(tmp_path):
 def test_real_catalog_loads():
     cat = fx.load_catalog()
     assert "叠化" in cat["transition"] and json.dumps(cat)
+
+
+# ---------- 计算 fx（排完镜头之后） ----------
+
+from narrate import Opts, layout                                  # noqa: E402
+from test_narrate import _clips, _live, _nudge_clips, _vis, us    # noqa: E402
+
+
+def _fx(items, clips, top=None, **opts):
+    plan = _plan(*items)
+    plan.update(top or {})
+    rows, track, rep = layout(plan, clips, {}, {}, {"n1": 60.0, "n2": 60.0}, Opts(**opts))
+    f, warns, notes = fx.compute_fx(plan, rows, rep["srcs"], rep["slots"], CAT)
+    return rows, rep, f, warns, notes
+
+
+TR = {"type": "叠化", "dur": 0.6}
+
+
+def _filt(cid, **kw):
+    return [{"clip_id": cid, "filter": {"type": "夏日风吟", **kw}}]
+
+
+def _syn(durs, items=None, vis=None):
+    """合成的 rows / srcs / slots：每个镜头一项（或按 items 指定），用于镜头很短、一个画面多个镜头这类排不出来的情况。"""
+    rows, srcs, t = [], [], 0
+    items = items or [f"L{k}" for k in range(len(durs))]
+    for k, d in enumerate(durs):
+        rows.append({"idx": k + 1, "kind": "narr", "source": f"/x/c{k}.mp4", "in_us": 0, "start_us": t, "dur_us": d})
+        srcs.append({"item": items[k], "vis": (vis or [0] * len(durs))[k]})
+        t += d
+    slots, seen = [], {}
+    for r, s in zip(rows, srcs):
+        if s["item"] in seen:
+            seen[s["item"]]["end_us"] = r["start_us"] + r["dur_us"]
+        else:
+            seen[s["item"]] = {"item": s["item"], "start_us": r["start_us"], "end_us": r["start_us"] + r["dur_us"], "live": False}
+            slots.append(seen[s["item"]])
+    return rows, srcs, slots
+
+
+def test_transition_at_cut_plain():
+    rows, _, f, w, notes = _fx([_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, visuals=_vis("c2"), transition=TR)],
+                               _clips(("c1", 60), ("c2", 60)))
+    assert f["transitions"] == [{"shot": 1, "at_us": rows[1]["start_us"], "type": "叠化", "dur_us": 600000, "item": "L2", "vip": False}]
+    assert w == [] and notes["L2"] == ["转场 叠化 0.6s"]
+    assert f["shots_sig"] == fx.shots_sig(rows)
+
+
+def test_transition_before_and_after_live():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c7", 30.0, 35.0, transition=TR),
+             _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c2"), transition=TR)]
+    rows, _, f, w, _ = _fx(items, _clips(("c1", 40), ("c2", 40), ("c7", 60)))
+    assert [(t["item"], t["shot"], t["at_us"]) for t in f["transitions"]] == [
+        ("V1", 1, rows[1]["start_us"]), ("L2", 2, rows[2]["start_us"])]
+
+
+def test_transition_live_to_live():                                      # Review Focus 2
+    items = [_live("V1", "c7", 30.0, 35.0), _live("V2", "c8", 10.0, 15.0, transition=TR)]
+    rows, _, f, _, _ = _fx(items, _clips(("c7", 60), ("c8", 60)))
+    assert [r["kind"] for r in rows] == ["live", "live"]
+    assert f["transitions"][0]["shot"] == 1 and f["transitions"][0]["at_us"] == rows[1]["start_us"]
+
+
+def test_transition_multi_visual_item():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 14.0, visuals=_vis("c2", "c3"), transition=TR)]
+    rows, rep, f, _, _ = _fx(items, _clips(("c1", 60), ("c2", 60), ("c3", 60)))
+    assert [s["item"] for s in rep["srcs"]] == ["L1", "L2", "L2"]
+    assert f["transitions"][0]["shot"] == 1 and f["transitions"][0]["at_us"] == rows[1]["start_us"]
+
+
+def test_transition_continuation_borrowed_new_shot():
+    # L2 没配画面；上一个镜头的素材 c1 紧接着就是原声段，不能延长，只能借画面切一刀：切点真实存在
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, transition=TR),
+             _live("V1", "c1", 20.0, 25.0), _line("L3", 2.0, 4.0, file="n2", visuals=_vis("c2"))]
+    rows, rep, f, w, _ = _fx(items, _clips(("c1", 60), ("c2", 60)))
+    assert rep["srcs"][1]["item"] == "L2"
+    assert f["transitions"][0]["item"] == "L2" and f["transitions"][0]["at_us"] == rows[1]["start_us"]
+
+
+def test_transition_swallowed_warns():
+    items = [_line("A", 1.0, 3.0, visuals=_vis("c1")), _line("B", 3.4, 4.0, visuals=_filt("c2"), transition=TR),
+             _line("C", 6.0, 9.0, visuals=_vis("c3"))]
+    _, _, f, w, _ = _fx(items, _clips(("c1", 60), ("c2", 60), ("c3", 60)))
+    assert f is None
+    assert any("B" in x and "转场" in x and "吞掉" in x for x in w)
+    assert any("B" in x and "滤镜" in x and "吞掉" in x for x in w)
+
+
+def test_transition_after_nudge():
+    items = [_line("A", 1.0, 19.231, visuals=_vis("g")), _line("B", 2.0, 8.0, file="n2", visuals=_vis("c2"), transition=TR)]
+    _, _, f, _, _ = _fx(items, _nudge_clips())
+    assert f["transitions"][0]["at_us"] == us(21.0)
+
+
+def test_transition_on_fallback_shot():                                  # Review Focus 3
+    # L1 的 c1 全是坏帧；相邻句的 c2 紧挨着不能用；只能 pick_one 从本章素材里拿 c3
+    items = [_line("L0", 1.0, 3.0, visuals=_vis("c2")),
+             _line("L1", 6.0, 8.0, visuals=_filt("c1"), transition=TR),
+             _line("L2", 11.0, 13.0, visuals=_vis("c2")), _line("L3", 16.0, 18.0, visuals=_vis("c3"))]
+    rows, rep, f, w, _ = _fx(items, _clips(("c1", 60, True), ("c2", 60), ("c3", 60)))
+    assert rows[1]["source"] == "/x/c3.mp4" and rep["srcs"][1] == {"item": "L1", "vis": None}
+    assert f["transitions"][0]["item"] == "L1" and f["transitions"][0]["shot"] == 1
+    assert f["filters"] == []
+    assert any("L1" in x and "滤镜" in x and "c3" in x for x in w)
+
+
+def test_transition_truncated_and_dropped():
+    rows, srcs, slots = _syn([3_000_000, 2_000_000])
+    plan = _plan(_line("L0", 0, 1), _line("L1", 2, 3, transition={"type": "叠化", "dur": 5}))
+    f, w, _ = fx.compute_fx(plan, rows, srcs, slots, CAT)
+    assert f["transitions"][0]["dur_us"] == 1_000_000 and any("截" in x for x in w)
+    rows, srcs, slots = _syn([150_000, 150_000])
+    f, w, _ = fx.compute_fx(plan, rows, srcs, slots, CAT)
+    assert f is None and any("L1" in x and "太短" in x for x in w)
+
+
+def test_effect_covers_final_slot():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, visuals=_vis("c2"), effect={"type": "冲击波"})]
+    _, rep, f, _, notes = _fx(items, _clips(("c1", 60), ("c2", 60)))
+    s = rep["slots"][1]
+    assert f["effects"] == [{"start_us": s["start_us"], "dur_us": s["end_us"] - s["start_us"], "type": "冲击波", "item": "L2", "vip": False}]
+    assert notes["L2"] == ["特效 冲击波"]
+
+
+def test_filter_follows_all_shots_of_visual():
+    rows, srcs, slots = _syn([2_000_000, 2_000_000, 2_000_000], items=["L0", "L1", "L1"], vis=[0, 0, 0])
+    plan = _plan(_line("L0", 0, 1), _line("L1", 2, 3, visuals=_filt("c1")))
+    f, w, notes = fx.compute_fx(plan, rows, srcs, slots, CAT)
+    assert f["filters"] == [{"shot": 2, "start_us": 2_000_000, "type": "夏日风吟", "intensity": 100, "item": "L1", "vip": False},
+                            {"shot": 3, "start_us": 4_000_000, "type": "夏日风吟", "intensity": 100, "item": "L1", "vip": False}]
+    assert w == [] and notes["L1"] == ["滤镜 夏日风吟 100"]
+
+
+def test_filter_not_on_borrowed():
+    rows, srcs, slots = _syn([2_000_000, 2_000_000], items=["L0", "L1"], vis=[0, None])
+    plan = _plan(_line("L0", 0, 1), _line("L1", 2, 3, visuals=_filt("c9", intensity=60)))
+    f, w, _ = fx.compute_fx(plan, rows, srcs, slots, CAT)
+    assert f is None and any("L1" in x and "滤镜" in x for x in w)
+
+
+def test_filter_extended_shot():
+    items = [_line("L1", 1.0, 3.0, visuals=_filt("c1", intensity=60)), _line("L2", 6.0, 8.0)]
+    rows, _, f, _, _ = _fx(items, _clips(("c1", 60)))
+    assert len(rows) == 1 and f["filters"] == [{"shot": 1, "start_us": 0, "type": "夏日风吟", "intensity": 60, "item": "L1", "vip": False}]
+
+
+def test_intro_outro_from_layout():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, visuals=_vis("c2"))]
+    rows, _, f, w, notes = _fx(items, _clips(("c1", 60), ("c2", 60)), top={"intro": {"type": "渐显"}, "outro": {"type": "渐隐"}})
+    assert f["intro"] == {"shot": 1, "type": "渐显", "dur_us": 500000, "vip": False}
+    assert f["outro"] == {"shot": 2, "type": "渐隐", "dur_us": 500000, "vip": False}
+    assert notes["L1"] == ["片头 渐显 0.5s"] and notes["L2"] == ["片尾 渐隐 0.5s"]
+
+
+def test_intro_outro_truncated_and_single_shot_halves():
+    plan = dict(_plan(_line("L0", 0, 1)), intro={"type": "渐显"}, outro={"type": "渐隐"})
+    rows, srcs, slots = _syn([600_000])
+    f, w, _ = fx.compute_fx(plan, rows, srcs, slots, CAT)
+    assert f["intro"]["dur_us"] == 300000 and f["outro"]["dur_us"] == 300000 and any("截" in x for x in w)
+    rows, srcs, slots = _syn([150_000])
+    f, w, _ = fx.compute_fx(plan, rows, srcs, slots, CAT)
+    assert f is None and sum("太短" in x for x in w) == 2
+    rows, srcs, slots = _syn([300_000, 2_000_000], items=["L0", "L0"])
+    only_intro = {k: v for k, v in plan.items() if k != "outro"}
+    f, w, _ = fx.compute_fx(only_intro, rows, srcs, slots, CAT)       # 两个镜头：片头只截到第一个镜头的长度
+    assert f["intro"]["dur_us"] == 300_000
+
+
+def test_no_fx_returns_none():
+    _, _, f, w, notes = _fx([_line("L1", 1.0, 3.0, visuals=_vis("c1"))], _clips(("c1", 60)))
+    assert f is None and w == [] and notes == {}
+
+
+def test_vip_flag_from_catalog():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, visuals=_vis("c2"), transition={"type": "星光叠化"})]
+    _, _, f, _, _ = _fx(items, _clips(("c1", 60), ("c2", 60)))
+    assert f["transitions"][0]["vip"] is True and f["transitions"][0]["dur_us"] == 500000
+
+
+_ROWS = [{"idx": 1, "kind": "narr", "source": "/x/a.mp4", "in_us": 0, "start_us": 0, "dur_us": 5},
+         {"idx": 2, "kind": "live", "source": "/x/b.mp4", "in_us": 7, "start_us": 5, "dur_us": 3}]
+
+
+@pytest.mark.parametrize("field,val", [("idx", 9), ("kind", "narr"), ("source", "/x/c.mp4"), ("in_us", 8),
+                                       ("start_us", 6), ("dur_us", 4)])
+def test_shots_sig_sensitive(field, val):
+    changed = [dict(_ROWS[0]), dict(_ROWS[1], **{field: val})]
+    assert fx.shots_sig(changed) != fx.shots_sig(_ROWS)
+
+
+def test_shots_sig_csv_strings_equal():
+    as_csv = [{k: str(v) for k, v in r.items()} for r in _ROWS]
+    assert fx.shots_sig(as_csv) == fx.shots_sig(_ROWS) and fx.shots_sig(_ROWS).startswith("sha1:")

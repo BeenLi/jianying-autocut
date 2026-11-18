@@ -908,3 +908,34 @@ def test_rows_unchanged_by_tracking():
     rows, _, _ = _lay([_line("L1", 1.0, 9.0, visuals=_vis("c1", "c2"))], _clips(("c1", 60), ("c2", 60)))
     assert set(rows[0]) == {"idx", "chapter", "chapter_title", "chapter_function", "kind", "name", "source", "in_s",
                             "dur_s", "start_s", "in_us", "dur_us", "start_us", "score", "mute"}
+
+
+def _work_fx(tmp_path):
+    w = _work(tmp_path)
+    p = json.loads((tmp_path / "narration_plan.json").read_text())
+    p["items"][1]["transition"] = {"type": "叠化", "dur": 0.6}
+    p["intro"] = {"type": "渐显"}
+    (tmp_path / "narration_plan.json").write_text(json.dumps(p, ensure_ascii=False))
+    return w
+
+
+def test_main_writes_fx_only_when_present(tmp_path):
+    import fx
+    from common import read_csv
+    (tmp_path / "a").mkdir()
+    w = _work(tmp_path / "a")
+    assert main(["--work", w]) == 0
+    assert "fx" not in json.loads((tmp_path / "a" / "narration_track.json").read_text())
+    (tmp_path / "b").mkdir()
+    w = _work_fx(tmp_path / "b")
+    assert main(["--work", w]) == 0
+    track = json.loads((tmp_path / "b" / "narration_track.json").read_text())
+    assert track["fx"]["shots_sig"] == fx.shots_sig(read_csv(os.path.join(w, "shots.csv")))
+    assert track["fx"]["transitions"][0]["item"] == "L2" and track["fx"]["intro"]["shot"] == 1
+
+
+def test_dry_run_prints_fx_lines(tmp_path, capsys):
+    w = _work_fx(tmp_path)
+    assert main(["--work", w, "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "⤷ 转场 叠化 0.6s" in out and "⤷ 片头 渐显 0.5s" in out
