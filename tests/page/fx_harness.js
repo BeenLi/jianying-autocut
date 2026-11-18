@@ -88,6 +88,67 @@ const R = {};
   v = (lastVis("L01") || [])[0];
   R.pendingClearedOnReorderedSnapshot = !!v && v.at === 20 && v.reuse === true;
 
+
+  // ---------- Task 8：效果卡片 ----------
+  const TRX = { type: "叠化", dur: 0.6, reason: "第二天一早", vip: false, confirmed: false, by: "claude" };
+  fire("nmatch", base([{ clip_id: "c001", filter: { type: "夏日风吟", intensity: 60, confirmed: false, by: "claude", vip: true } }],
+                      { transition: TRX, effect: { type: "冲击波", vip: null, confirmed: false, by: "claude" } }));
+  click({ act: "sel", id: "L01" });
+  const H = () => app.innerHTML;
+  R.cardsRender = H().includes("叠化") && H().includes("0.6s") && H().includes("第二天一早") && H().includes("待确认")
+    && H().includes("会员") && H().includes("会员？") && H().includes("夏日风吟") && H().includes("强度 60");
+  R.listMarker = H().includes("✦") && H().includes("fx-todo");
+
+  calls.length = 0;
+  click({ act: "fx-confirm", kind: "transition", id: "L01" }); await tick();
+  const cw = calls.find((c) => c.path === "nmatch/L01" && c.data.transition);
+  R.confirmWrites = !!cw && cw.data.transition.confirmed === true && cw.data.transition.by === "user"
+    && cw.data.transition.type === "叠化" && Object.keys(cw.data).length === 1;
+
+  calls.length = 0;
+  click({ act: "fx-edit", kind: "transition", id: "L01" });
+  R.editFormShown = H().includes('id="fx-type-L01-transition"') && H().includes('id="fx-dur-L01-transition"');
+  els["fx-type-L01-transition"] = { value: "闪白" }; els["fx-dur-L01-transition"] = { value: "0.8" };
+  click({ act: "fx-save", kind: "transition", id: "L01" }); await tick();
+  const ew = calls.find((c) => c.path === "nmatch/L01" && c.data.transition);
+  R.editWrites = !!ew && ew.data.transition.type === "闪白" && ew.data.transition.dur === 0.8
+    && ew.data.transition.confirmed === true && ew.data.transition.vip === null && ew.data.transition.reason === "第二天一早";
+
+  // 全部确认后，清单上的标记不再是黄色
+  fire("nmatch", base([{ clip_id: "c001", filter: { type: "夏日风吟", intensity: 60, confirmed: true, by: "user" } }],
+                      { transition: { ...TRX, confirmed: true, by: "user" }, effect: { type: "冲击波", confirmed: true, by: "user" } }));
+  // 左侧图例里本来就有「待确认 N」，所以看卡片本身的样式
+  R.confirmedAfterSnapshot = (H().match(/class="fx"/g) || []).length === 3 && !H().includes('class="fx todo"')
+    && H().includes("✦") && !H().includes("fx-todo");
+
+  calls.length = 0;
+  click({ act: "fx-remove", kind: "transition", id: "L01" }); await tick();
+  R.removeWritesNull = calls.some((c) => c.path === "nmatch/L01" && "transition" in c.data && c.data.transition === null);
+
+  // 去掉滤镜：写出的画面对象里没有 filter 键；失败后马上勾「消音」再重试，滤镜不会复活
+  const withFilt = base([{ clip_id: "c001", filter: FILT }]);
+  fire("nmatch", withFilt);
+  failOnce.add("nmatch/L01");
+  click({ act: "fx-remove", kind: "filter", id: "L01", i: "0" }); await tick();   // 失败
+  fire("nmatch", withFilt);                                                     // 旧快照
+  calls.length = 0;
+  change("L01", "mute", 0, true); await tick();
+  const vs = calls.filter((c) => c.path === "nmatch/L01" && c.data.visuals);
+  R.removeFilterNoResurrection = vs.length > 0 && vs.every((c) => !("filter" in c.data.visuals[0])) && vs[vs.length - 1].data.visuals[0].mute === true;
+
+  // 片头 / 片尾：在剪辑视图顶部，分别写进 plan/meta，互不覆盖
+  fire("plan", { meta: { title: "t", kind: "narration", stage: "editing", intro: { type: "渐显", confirmed: false, by: "claude" },
+                         outro: { type: "渐隐", confirmed: false, by: "claude" } } });
+  R.introOutroRender = H().includes("片头") && H().includes("渐显") && H().includes("片尾") && H().includes("渐隐");
+  calls.length = 0;
+  click({ act: "fx-confirm", kind: "intro", meta: "1" }); await tick();
+  const mw = calls.find((c) => c.path === "plan/meta");
+  R.introOutroSeparate = !!mw && mw.data.intro.confirmed === true && !("outro" in mw.data) && Object.keys(mw.data).length === 1;
+
+  // 旧数据：没有任何效果字段，照常渲染，不出现标记和卡片
+  fire("plan", { meta: { title: "t", kind: "narration", stage: "editing" } });
+  fire("nmatch", base([{ clip_id: "c001", at: 12 }]));
+  R.oldDataRenders = H().includes("凌晨四点出发") && !H().includes("✦") && !H().includes('class="fx ');
   console.log(JSON.stringify(R));
   process.exit(Object.values(R).every(Boolean) ? 0 : 1);
 })();

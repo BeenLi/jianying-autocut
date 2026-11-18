@@ -126,6 +126,12 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
 .prompter .say small { font-family: var(--font-mono); font-size: .9rem; color: var(--muted); margin-left: 8px; }
 .prompter .cue { font-size: 1.05rem; color: var(--warn); margin: 0; }
 .prompter .say.todo { background: var(--warn-bg); border-left: 4px solid var(--warn); border-radius: 0 8px 8px 0; padding: 4px 12px; }
+.fx { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; font-size: .9rem; }
+.fx.todo { border-color: var(--warn); background: var(--warn-bg); }
+.fx .vip { font-size: .75rem; font-weight: 700; color: var(--warn); border: 1px solid var(--warn); border-radius: 99px; padding: 0 6px; }
+.fx .tips { margin: 0; }
+.fxtop { display: grid; gap: 8px; margin-bottom: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.fxmark { color: var(--ok); margin-right: 4px; } .fxmark.fx-todo { color: var(--warn); }
 .todo-tag { display: inline-block; vertical-align: middle; font-size: .8rem; font-weight: 700; color: var(--warn); border: 1px solid var(--warn); border-radius: 99px; padding: 0 8px; margin-right: 10px; line-height: 1.6; }
 @media (prefers-reduced-motion: reduce) { .chev { transition: none; } }
 </style>
@@ -485,16 +491,65 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     const counts = es.reduce((a, e) => (a[narrState(e)[0]]++, a), { ok: 0, warn: 0, bad: 0, skip: 0 });
     const list = chs.map((c, i) => `<h3>${i + 1} ${esc(c.title)}</h3>` + es.filter(e => e.chapter === c.id).map(e => {
       const [cls] = narrState(e);
-      return `<button class="item" data-act="sel" data-id="${esc(e.id)}" aria-current="${S.sel === e.id}"><span class="dot ${cls}"></span><span class="t">${e.kind === "live" ? "〔原声〕" : ""}${esc(e.text)}</span></button>`;
+      return `<button class="item" data-act="sel" data-id="${esc(e.id)}" aria-current="${S.sel === e.id}"><span class="dot ${cls}"></span><span class="t">${fxMark(e)}${e.kind === "live" ? "〔原声〕" : ""}${esc(e.text)}</span></button>`;
     }).join("")).join("");
     const e = es.find(x => x.id === S.sel);
-    return `<div class="desk">
+    return `${fxTop()}<div class="desk">
       <nav class="list" aria-label="旁白清单">
         <div class="legend"><span><i class="dot ok"></i>已确认 ${counts.ok}</span><span><i class="dot warn"></i>待确认 ${counts.warn}</span><span><i class="dot bad"></i>缺 ${counts.bad}</span><span><i class="dot skip"></i>跳过 ${counts.skip}</span></div>
         ${list}
       </nav>
       <section class="panel">${e ? narrPanel(e) : `<p class="muted">还没有旁白。</p>`}</section>
     </div>`;
+  }
+
+  // ---------- 效果卡片（转场 / 特效 / 滤镜 / 片头 / 片尾）----------
+  const FX_LABEL = { transition: "转场", effect: "画面特效", filter: "滤镜", intro: "片头", outro: "片尾" };
+  // ctx：{id} 句子上的转场 / 特效；{id, i} 第 i 个画面的滤镜；{meta: true} 片头 / 片尾
+  const fxKey = (kind, ctx) => ctx.meta ? `meta-${kind}` : ctx.i != null ? `${ctx.id}-f${ctx.i}` : `${ctx.id}-${kind}`;
+  const fxData = (kind, ctx) => `data-kind="${kind}"${ctx.meta ? ` data-meta="1"` : ` data-id="${esc(ctx.id)}"`}${ctx.i != null ? ` data-i="${ctx.i}"` : ""}`;
+  function fxCard(kind, o, ctx) {
+    const key = fxKey(kind, ctx), d = fxData(kind, ctx), ok = o.confirmed === true;
+    const vip = o.vip === true ? `<span class="vip">会员</span>` : o.vip === null ? `<span class="vip">会员？</span>` : "";
+    const detail = kind === "transition" ? (o.dur != null ? ` ${esc(o.dur)}s` : " 默认时长") : kind === "filter" ? ` 强度 ${esc(o.intensity ?? 100)}` : "";
+    if (S.fxEdit === key) {
+      const dv = (id, v) => esc(S.drafts[id] ?? v ?? "");
+      return `<div class="fx"><b>${FX_LABEL[kind]}</b>
+        <div class="two"><label>名字（剪映里的中文名）<input type="text" id="fx-type-${key}" value="${dv("fx-type-" + key, o.type)}"></label>
+        ${kind === "transition" ? `<label>时长（秒，可不填）<input type="text" id="fx-dur-${key}" value="${dv("fx-dur-" + key, o.dur)}"></label>` : ""}
+        ${kind === "filter" ? `<label>强度（0–100，可不填）<input type="text" id="fx-int-${key}" value="${dv("fx-int-" + key, o.intensity)}"></label>` : ""}</div>
+        <div class="row"><button class="primary" data-act="fx-save" ${d} ${dis()}>保存并确认</button><button data-act="fx-cancel" ${d}>取消</button></div></div>`;
+    }
+    return `<div class="fx${ok ? "" : " todo"}"><div class="row" style="justify-content:space-between"><span><b>${FX_LABEL[kind]}：${esc(o.type)}</b>${detail} ${vip}</span><span class="state ${ok ? "ok" : "warn"}">${ok ? "已确认" : "待确认"}</span></div>
+      ${o.reason ? `<p class="tips">理由：${esc(o.reason)}</p>` : ""}
+      <div class="row">${ok ? "" : `<button class="primary" data-act="fx-confirm" ${d} ${dis()}>确认</button>`}<button data-act="fx-edit" ${d} ${dis()}>改</button><button class="danger" data-act="fx-remove" ${d} ${dis()}>去掉</button></div></div>`;
+  }
+  // 这一句（含画面滤镜）的效果：非 null 的才算
+  const fxOf = (id, m) => m ? [m.transition, m.effect, ...curVis(id).map(v => v && v.filter)].filter(Boolean) : [];
+  function fxMark(e) {
+    const fs = fxOf(e.id, e.m);
+    return fs.length ? `<span class="fxmark${fs.some(o => o.confirmed !== true) ? " fx-todo" : ""}" title="有效果">✦</span>` : "";
+  }
+  function fxTop() {
+    const m = S.meta || {};
+    const cards = ["intro", "outro"].filter(k => m[k]).map(k => fxCard(k, m[k], { meta: true }));
+    return cards.length ? `<div class="fxtop">${cards.join("")}</div>` : "";
+  }
+  // 按钮 → 读 / 写哪个效果对象
+  function fxTarget(el) {
+    const kind = el.dataset.kind, id = el.dataset.id, i = el.dataset.i != null ? +el.dataset.i : null;
+    const ctx = el.dataset.meta ? { meta: true } : { id, i };
+    if (ctx.meta) return { kind, ctx, obj: (S.meta || {})[kind], put: o => write("plan/meta", { [kind]: o }) };
+    if (kind === "filter") return {
+      kind, ctx, obj: (curVis(id)[i] || {}).filter,
+      put: o => writeVis(id, curVis(id).map((v, k) => {
+        if (k !== i) return v;
+        const n = { ...v };
+        if (o) n.filter = o; else delete n.filter;      // 去掉滤镜：删掉键，不写 null（visuals 里的对象原样导出）
+        return n;
+      }), { by: "user" }),
+    };
+    return { kind, ctx, obj: (S.nmatch[id] || {})[kind], put: o => write("nmatch/" + id, { [kind]: o }) };
   }
 
   function carriedNote(e, m) {
@@ -515,12 +570,13 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     if (!m) return head + `<p>录音里没找到这句。要么补录，要么在旁白稿里删掉它。</p>`;
     // 每个画面两个勾选：允许重复用（素材已被原声段等占用也能再用）、消音（这个镜头的垫底原声关掉）
     const flag = (v, i, f, label) => `<label><input type="checkbox" id="v${f[0]}-${id}-${i}" data-act="vflag-n" data-id="${id}" data-i="${i}" data-f="${f}" ${v[f] === true ? "checked" : ""} ${dis()}>${label}</label>`;
-    const vis = vlist.map((v, i) => `<div class="card"><b class="mono">${esc(v.clip_id)}${v.at != null ? " @ " + esc(fmt(v.at)) : ""}</b>${thumbs(v.clip_id)}${S.clips[v.clip_id] && S.clips[v.clip_id].desc ? `<p class="tips">${esc(S.clips[v.clip_id].desc)}</p>` : ""}${e.kind === "live" ? "" : `<div class="checks">${flag(v, i, "reuse", "允许重复用")}${flag(v, i, "mute", "消音")}</div>`}</div>`).join("");
+    const vis = vlist.map((v, i) => `<div class="card"><b class="mono">${esc(v.clip_id)}${v.at != null ? " @ " + esc(fmt(v.at)) : ""}</b>${thumbs(v.clip_id)}${S.clips[v.clip_id] && S.clips[v.clip_id].desc ? `<p class="tips">${esc(S.clips[v.clip_id].desc)}</p>` : ""}${e.kind === "live" ? "" : `<div class="checks">${flag(v, i, "reuse", "允许重复用")}${flag(v, i, "mute", "消音")}</div>`}${v.filter ? fxCard("filter", v.filter, { id: e.id, i }) : ""}</div>`).join("");
     return head + `
       <dl class="kv"><dt>录音</dt><dd class="mono">${esc(m.file || "")} ${esc(fmt(m.start))}–${esc(fmt(m.end))}</dd>
         ${m.skip_reason ? `<dt>跳过原因</dt><dd>${esc(m.skip_reason)}</dd>` : ""}
         ${m.reason ? `<dt>理由</dt><dd>${esc(m.reason)}</dd>` : ""}
         <dt>把握</dt><dd>${CONF[m.confidence] || "—"}${m.by === "user" ? " · 你改过" : " · Claude 建议"}</dd></dl>
+      ${["transition", "effect"].filter(k => m[k]).map(k => fxCard(k, m[k], { id: e.id })).join("")}
       ${vis || (e.kind === "live" ? "" : carriedNote(e, m))}
       <div class="row">${m.skip ? `<button class="primary" data-act="skip-n" data-id="${id}" data-v="0" ${dis()}>恢复这句</button>` :
         `${m.confirmed === true ? `<button data-act="unconfirm-n" data-id="${id}" ${dis()}>取消确认</button>` : `<button class="primary" data-act="confirm-n" data-id="${id}" ${dis()}>确认</button>`}
@@ -769,6 +825,32 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         return n;
       });
       writeVis(id, visuals, { by: "user" });
+    },
+    "fx-confirm": el => { const t = fxTarget(el); if (t.obj) t.put({ ...t.obj, confirmed: true, by: "user" }); },
+    "fx-edit": el => { const t = fxTarget(el); S.fxEdit = fxKey(t.kind, t.ctx); render(); },
+    "fx-cancel": el => { const t = fxTarget(el), key = fxKey(t.kind, t.ctx); S.fxEdit = null; clearDrafts(new RegExp(`^fx-(type|dur|int)-${key}$`)); render(); },
+    "fx-remove": el => { const t = fxTarget(el); S.fxEdit = null; t.put(null); },
+    "fx-save": el => {
+      const t = fxTarget(el), key = fxKey(t.kind, t.ctx), o = t.obj;
+      if (!o) return;
+      const bad = (id, msg) => { const b = document.getElementById(id); if (b && b.setCustomValidity) { b.setCustomValidity(msg); b.reportValidity(); b.setCustomValidity(""); } };
+      const type = val(`fx-type-${key}`).trim();
+      if (!type) return bad(`fx-type-${key}`, "写剪映里的中文名");
+      const n = { ...o, type, confirmed: true, by: "user" };
+      if (type !== o.type) n.vip = null;          // 页面不加载目录：会员与否以 dry-run 为准
+      // 转场能改时长，滤镜能改强度；留空就删掉这个键（用默认值）
+      const fields = t.kind === "transition" ? [["dur", `fx-dur-${key}`, x => x > 0]]
+        : t.kind === "filter" ? [["intensity", `fx-int-${key}`, x => x >= 0 && x <= 100]] : [];
+      for (const [f, id, ok] of fields) {
+        const raw = val(id).trim();
+        if (raw === "") { delete n[f]; continue; }
+        const x = num(raw);
+        if (x === null || !ok(x)) return bad(id, f === "dur" ? "时长要是正的秒数" : "强度在 0–100 之间");
+        n[f] = x;
+      }
+      S.fxEdit = null;
+      clearDrafts(new RegExp(`^fx-(type|dur|int)-${key}$`));
+      t.put(n);
     },
     "retime-n": el => {
       const id = el.dataset.id, a = num(val(`n-start-${id}`)), b = num(val(`n-end-${id}`));
