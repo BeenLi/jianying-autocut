@@ -829,3 +829,31 @@ def test_no_sliver_when_remainder_cannot_be_nudged():
         _rows_ok(rows, track["total_us"])
         assert rep["items"][0]["end_us"] - rep["items"][0]["start_us"] == us(3.05)
         assert all(r["dur_us"] >= MIN_SHOT for r in rows), [(r["name"], r["dur_us"]) for r in rows]
+
+
+# ---------- 效果字段（fx） ----------
+
+def test_validate_without_fx_needs_no_catalog(tmp_path, monkeypatch):
+    import fx
+    monkeypatch.setattr(fx, "CATALOG_PATH", str(tmp_path / "nope.json"))
+    w = _work(tmp_path)
+    plan = json.loads((tmp_path / "narration_plan.json").read_text())
+    assert validate(plan, {"c1": 60.0, "c2": 60.0}, {"n1": 30.0}) == ([], [])
+    assert main(["--work", w, "--dry-run"]) == 0
+
+
+def test_catalog_missing_only_matters_with_fx(tmp_path, monkeypatch, capsys):    # Review Focus 1
+    import fx
+    monkeypatch.setattr(fx, "CATALOG_PATH", str(tmp_path / "nope.json"))
+    w = _work(tmp_path)
+    p = json.loads((tmp_path / "narration_plan.json").read_text())
+    p["intro"] = {"type": "渐显"}
+    (tmp_path / "narration_plan.json").write_text(json.dumps(p, ensure_ascii=False))
+    assert main(["--work", w, "--dry-run"]) == 1
+    assert "重跑 fx_catalog.py" in capsys.readouterr().err
+
+
+def test_validate_reports_fx_errors_with_real_catalog():
+    plan = _plan(_line("L1", 0, 1), _line("L2", 2, 3, transition={"type": "叠画"}))
+    errs, _ = validate(plan, {}, {"n1": 60.0})
+    assert len(errs) == 1 and "叠化" in errs[0]

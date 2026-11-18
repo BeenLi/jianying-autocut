@@ -24,6 +24,7 @@ import sys
 from contextlib import nullcontext
 from dataclasses import dataclass, fields
 
+import fx
 from common import US, load_json
 from plan import MIN_SHOT, fmt, load_clips, pick_one, place_pin, write_shots
 
@@ -70,8 +71,9 @@ def _ratio(a, b):
 
 # ---------- 校验 ----------
 
-def validate(plan, clip_durs, file_durs):
-    """返回 (errs, warns)。clip_durs：{clip_id: 秒}；file_durs：{fid: 秒}（只含磁盘上存在的文件）。"""
+def validate(plan, clip_durs, file_durs, catalog=None):
+    """返回 (errs, warns)。clip_durs：{clip_id: 秒}；file_durs：{fid: 秒}（只含磁盘上存在的文件）。
+    有效果字段时才读效果目录（catalog 不给就读 assets/fx_catalog.json）。"""
     errs, warns = [], []
     files = plan.get("files", {})
     items, chs = plan.get("items", []), plan.get("chapters", [])
@@ -132,6 +134,13 @@ def validate(plan, clip_durs, file_durs):
                 errs.append(f"{iid}：原声段 {start}–{end}s 超出素材 {cid}（{clip_durs[cid]}s）")
         else:
             errs.append(f"{iid}：type 只能是 line 或 live")
+    if fx.has_fx(plan):
+        try:
+            e2, w2 = fx.validate_fx(plan, catalog or fx.load_catalog())
+            errs += e2
+            warns += w2
+        except ValueError as e:
+            errs.append(str(e))
     return errs, warns
 
 
