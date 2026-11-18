@@ -857,3 +857,54 @@ def test_validate_reports_fx_errors_with_real_catalog():
     plan = _plan(_line("L1", 0, 1), _line("L2", 2, 3, transition={"type": "叠画"}))
     errs, _ = validate(plan, {}, {"n1": 60.0})
     assert len(errs) == 1 and "叠化" in errs[0]
+
+
+# ---------- 镜头来源（fx 用） ----------
+
+def test_srcs_record_item_and_vis():
+    rows, _, rep = _lay([_line("L1", 1.0, 9.0, visuals=_vis("c1", "c2"))], _clips(("c1", 60), ("c2", 60)))
+    assert [r["source"] for r in rows] == ["/x/c1.mp4", "/x/c2.mp4"]
+    assert rep["srcs"] == [{"item": "L1", "vis": 0}, {"item": "L1", "vis": 1}]
+
+
+def test_srcs_actual_visual_when_first_is_taken():
+    rows, _, rep = _lay([_line("L1", 1.0, 1.5, visuals=_vis("c1", "c2"))], _clips(("c1", 60, True), ("c2", 60)))   # 槽 3.6s，只有一块
+    assert [r["source"] for r in rows] == ["/x/c2.mp4"]
+    assert rep["srcs"] == [{"item": "L1", "vis": 1}]
+
+
+def test_srcs_borrowed_is_none():
+    items = [_line("L0", 1.0, 3.0, visuals=_vis("c3")), _line("L1", 6.0, 8.0, visuals=_vis("c1")),
+             _line("L2", 11.0, 13.0, visuals=_vis("c2"))]
+    rows, _, rep = _lay(items, _clips(("c1", 40, True), ("c2", 40), ("c3", 40)))
+    assert rows[1]["source"] == "/x/c2.mp4"
+    assert rep["srcs"][1] == {"item": "L1", "vis": None}
+    # L2 紧跟在用了 c2 的 L1 后面，不能再用 c2，也是借来的
+    assert rows[2]["source"] != "/x/c2.mp4" and rep["srcs"][2] == {"item": "L2", "vis": None}
+
+
+def test_srcs_extended_keeps_source():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0)]
+    rows, _, rep = _lay(items, _clips(("c1", 60)))
+    assert len(rows) == 1 and rep["srcs"] == [{"item": "L1", "vis": 0}]
+
+
+def test_srcs_live():
+    items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c7", 30.0, 35.0),
+             _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c2"))]
+    rows, _, rep = _lay(items, _clips(("c1", 40), ("c2", 40), ("c7", 60)))
+    assert rep["srcs"] == [{"item": "L1", "vis": 0}, {"item": "V1", "vis": None}, {"item": "L2", "vis": 0}]
+
+
+def test_report_slots_after_nudge():
+    items = [_line("A", 1.0, 19.231, visuals=_vis("g")), _line("B", 2.0, 8.0, file="n2", visuals=_vis("c2"))]
+    rows, track, rep = _lay(items, _nudge_clips())
+    a, b = rep["slots"]
+    assert a["item"] == "A" and a["end_us"] == b["start_us"] == us(21.0) == rows[1]["start_us"]
+    assert b["end_us"] == track["total_us"]
+
+
+def test_rows_unchanged_by_tracking():
+    rows, _, _ = _lay([_line("L1", 1.0, 9.0, visuals=_vis("c1", "c2"))], _clips(("c1", 60), ("c2", 60)))
+    assert set(rows[0]) == {"idx", "chapter", "chapter_title", "chapter_function", "kind", "name", "source", "in_s",
+                            "dur_s", "start_s", "in_us", "dur_us", "start_us", "score", "mute"}
