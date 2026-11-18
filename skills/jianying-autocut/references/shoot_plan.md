@@ -36,7 +36,7 @@
 
 | 路径 | 字段 | 你写 | 用户在页面上写 |
 |---|---|---|---|
-| `plan/meta` | `title`, `intent`, `place`, `days`, `stage`（`shooting` / `editing`） | ✓ | `title`, `intent` |
+| `plan/meta` | `title`, `intent`, `place`, `days`, `stage`（`shooting` / `editing`）；旁白片另有 `kind: "narration"`、`intro`、`outro`（效果对象） | ✓ | `title`, `intent`；片头片尾确认 / 改 / 去掉 |
 | `chapters/<id>` | `order`, `title`, `function`, `rhythm` | 初稿 | 改名、改顺序、增删 |
 | `shots/<id>` | `chapter`, `order`, `kind`, `desc`, `size`, `duration`, `talk`, `tips`, `done`, `note`, `edited_by_user` | 初稿 | 勾选、备注、改描述、增删 |
 | `clips/<clip_id>` | `thumbs: [{id, t}]`（asset id + 素材内秒数）, `desc`, `duration` | ✓ | 只读 |
@@ -44,7 +44,7 @@
 | `extras/<clip_id>` | `chapter`, `at`, `reason`, `accepted`（null / true / false） | 建议 | 采纳、拒绝 |
 | `requests/<id>` | `text`, `status`（new / done / not_found）, `reply`, `created` | `status`, `reply` | `text` |
 | `lines/<L01…>` | `chapter`, `order`, `kind`（`narr` 旁白 / `live` 这里放原声）, `text`, `shots: [shot_id]`, `est_s`, `edited_by_user` | 旁白稿初稿 | 增删改、关联镜头 |
-| `nmatch/<id>` | `file`, `start`, `end`, `skip`, `skip_reason`, `visuals: [{clip_id, at}]`, `confidence`, `reason`, `confirmed`, `by`；稿外的转写句另有 `chapter`, `order`, `text`；`live` 句用 `clip_id` + `start/end`（素材内秒） | 剪辑时的建议 | 确认、换画面、改时间、跳过 / 恢复 |
+| `nmatch/<id>` | `file`, `start`, `end`, `skip`, `skip_reason`, `visuals: [{clip_id, at}]`, `confidence`, `reason`, `confirmed`, `by`；稿外的转写句另有 `chapter`, `order`, `text`；`live` 句用 `clip_id` + `start/end`（素材内秒）；旁白片的效果：`transition`、`effect`、`visuals[i].filter`（效果对象见 `narration.md`） | 剪辑时的建议 | 确认、换画面、改时间、跳过 / 恢复；效果逐个确认 / 改 / 去掉（写 `null`） |
 
 旁白片（`plan/meta.kind: "narration"`）的写法和导出见 `narration.md`。`lines.est_s` 留空时页面按约 4 字/秒自己估；
 用户改了 `text` 页面会把 `est_s` 清空。

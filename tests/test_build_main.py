@@ -358,3 +358,121 @@ def test_missing_narration_file_is_reported_as_missing_not_ffmpeg(tmp_path, monk
     with pytest.raises(SystemExit, match="旁白文件不存在.*vo.m4a"):
         _run(monkeypatch, "--work", str(work), "--name", "坏", "--drafts-dir", str(drafts),
              "--narration", str(work / "narration_track.json"))
+
+
+# ---------- 效果（fx） ----------
+
+import fx  # noqa: E402
+
+FULL_FX = {
+    "transitions": [{"shot": 1, "at_us": 5000000, "type": "叠化", "dur_us": 400000, "item": "L1", "vip": False}],
+    "effects": [{"start_us": 1000000, "dur_us": 1000000, "type": "丁达尔光线", "item": "L1", "vip": False}],
+    "filters": [{"shot": 2, "start_us": 5000000, "type": "夏日风吟", "intensity": 60, "item": "V1", "vip": False}],
+    "intro": {"shot": 1, "type": "渐显", "dur_us": 500000, "vip": False},
+    "outro": {"shot": 2, "type": "渐隐", "dur_us": 500000, "vip": False},
+}
+
+
+def _with_fx(work, fx_patch=None):
+    """往 _narration() 写出的 track 里加 fx 段，shots_sig 按真实的 shots.csv 算。"""
+    from common import read_csv
+    track = json.loads((work / "narration_track.json").read_text())
+    f = {"shots_sig": fx.shots_sig(read_csv(str(work / "shots.csv"))), "transitions": [], "effects": [], "filters": []}
+    f.update(json.loads(json.dumps(FULL_FX if fx_patch is None else fx_patch)))
+    track["fx"] = f
+    (work / "narration_track.json").write_text(json.dumps(track, ensure_ascii=False))
+    return f
+
+
+def _fx_build(tmp_path, monkeypatch, fx_patch=None, name="旁白片", extra=()):
+    drafts, work, old = _setup(tmp_path)
+    _narration(tmp_path, work)
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -3.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    f = _with_fx(work, fx_patch)
+    _run(monkeypatch, "--work", str(work), "--name", name, "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"), *extra)
+    return json.load(open(drafts / name / "draft_info.json")), f, drafts, work, old
+
+
+def test_fx_attached_before_add_segment(tmp_path, monkeypatch, capsys):
+    d, _, _, _, _ = _fx_build(tmp_path, monkeypatch)
+    video = [t for t in d["tracks"] if t["type"] == "video"][0]["segments"]
+    m = d["materials"]
+    assert len(m["transitions"]) == 1 and m["transitions"][0]["id"] in video[0]["extra_material_refs"]
+    assert m["transitions"][0]["duration"] == 400000
+    flt = [e for e in m["effects"] if e.get("type") == "filter"]
+    assert len(flt) == 1 and flt[0]["id"] in video[1]["extra_material_refs"] and abs(flt[0]["value"] - 0.6) < 1e-6
+    anims = {a["type"]: a for ma in m["material_animations"] for a in ma["animations"]}
+    assert anims["in"]["name"] == "渐显" and anims["out"]["name"] == "渐隐"
+    assert anims["out"]["start"] == 3000000 - 500000
+    eff = _segs(d, "特效")
+    assert len(eff) == 1 and eff[0]["target_timerange"] == {"start": 1000000, "duration": 1000000}
+    assert "✓" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("breakit", ["sig", "shot", "at", "name"])
+def test_preflight_fails_and_keeps_old_draft(tmp_path, monkeypatch, breakit):
+    drafts, work, old = _setup(tmp_path)
+    _narration(tmp_path, work)
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -3.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    f = _with_fx(work)
+    if breakit == "sig":
+        f["shots_sig"] = f["shots_sig"][:-1] + ("0" if f["shots_sig"][-1] != "0" else "1")
+    elif breakit == "shot":
+        f["filters"][0]["shot"] = 9
+    elif breakit == "at":
+        f["transitions"][0]["at_us"] += 1
+    else:
+        f["intro"]["type"] = "不存在的动画"
+    track = json.loads((work / "narration_track.json").read_text())
+    track["fx"] = f
+    (work / "narration_track.json").write_text(json.dumps(track, ensure_ascii=False))
+    with pytest.raises(SystemExit, match="重跑 narrate.py"):
+        _run(monkeypatch, "--work", str(work), "--name", "旧草稿", "--drafts-dir", str(drafts),
+             "--narration", str(work / "narration_track.json"), "--replace")
+    assert (old / "keep.txt").exists()
+
+
+def test_preflight_idx_not_position(tmp_path, monkeypatch):                     # Review Focus 4
+    from common import read_csv, write_csv
+    drafts, work, old = _setup(tmp_path)
+    _narration(tmp_path, work)
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -3.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    rows = read_csv(str(work / "shots.csv"))
+    rows[1]["idx"] = "3"
+    write_csv(str(work / "shots.csv"), rows, list(rows[0]))
+    _with_fx(work, {"filters": [{"shot": 2, "start_us": 5000000, "type": "夏日风吟", "intensity": 60, "item": "V1", "vip": False}]})
+    with pytest.raises(SystemExit, match="idx"):
+        _run(monkeypatch, "--work", str(work), "--name", "旧草稿", "--drafts-dir", str(drafts),
+             "--narration", str(work / "narration_track.json"), "--replace")
+    assert (old / "keep.txt").exists()
+
+
+def test_no_fx_no_effect_track(tmp_path, monkeypatch):
+    drafts, work, _ = _setup(tmp_path)
+    _narration(tmp_path, work)
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -3.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    _run(monkeypatch, "--work", str(work), "--name", "无效果", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"))
+    d = json.load(open(drafts / "无效果" / "draft_info.json"))
+    m = d["materials"]
+    assert not _segs(d, "特效") and not any(t["type"] == "effect" for t in d["tracks"])
+    assert m["transitions"] == [] and m["video_effects"] == [] and m["material_animations"] == []
+    assert [e for e in m["effects"] if e.get("type") == "filter"] == []
+
+
+def test_effect_segment_dangling_material_id(tmp_path, monkeypatch):
+    from common import detect_versions, read_csv
+    _, _, drafts, work, _ = _fx_build(tmp_path, monkeypatch)
+    p = drafts / "旁白片" / "draft_info.json"
+    d = json.loads(p.read_text())
+    next(t for t in d["tracks"] if t["type"] == "effect")["segments"][0]["material_id"] = "nope"
+    p.write_text(json.dumps(d, ensure_ascii=False))
+    errs, _ = build.verify(str(drafts / "旁白片"), read_csv(str(work / "shots.csv")), detect_versions(str(drafts)), 0, 1)
+    assert any("悬空" in e and "nope" in e for e in errs)
+
+
+def test_build_reports_fx_summary(tmp_path, monkeypatch, capsys):
+    _fx_build(tmp_path, monkeypatch)
+    out = capsys.readouterr().out
+    assert "✓ 效果逐个对上" in out and "转场 1 个、特效 1 个、滤镜 1 个、片头片尾动画 2 个" in out

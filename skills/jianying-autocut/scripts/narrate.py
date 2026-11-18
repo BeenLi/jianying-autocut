@@ -24,6 +24,7 @@ import sys
 from contextlib import nullcontext
 from dataclasses import dataclass, fields
 
+import fx
 from common import US, load_json
 from plan import MIN_SHOT, fmt, load_clips, pick_one, place_pin, write_shots
 
@@ -70,8 +71,9 @@ def _ratio(a, b):
 
 # ---------- 校验 ----------
 
-def validate(plan, clip_durs, file_durs):
-    """返回 (errs, warns)。clip_durs：{clip_id: 秒}；file_durs：{fid: 秒}（只含磁盘上存在的文件）。"""
+def validate(plan, clip_durs, file_durs, catalog=None):
+    """返回 (errs, warns)。clip_durs：{clip_id: 秒}；file_durs：{fid: 秒}（只含磁盘上存在的文件）。
+    有效果字段时才读效果目录（catalog 不给就读 assets/fx_catalog.json）。"""
     errs, warns = [], []
     files = plan.get("files", {})
     items, chs = plan.get("items", []), plan.get("chapters", [])
@@ -132,6 +134,13 @@ def validate(plan, clip_durs, file_durs):
                 errs.append(f"{iid}：原声段 {start}–{end}s 超出素材 {cid}（{clip_durs[cid]}s）")
         else:
             errs.append(f"{iid}：type 只能是 line 或 live")
+    if fx.has_fx(plan):
+        try:
+            e2, w2 = fx.validate_fx(plan, catalog or fx.load_catalog())
+            errs += e2
+            warns += w2
+        except ValueError as e:
+            errs.append(str(e))
     return errs, warns
 
 
@@ -499,7 +508,7 @@ def _place_in_free_segment(c, d, reuse=False):
 def _place_any(cands, clips, avoid, remaining, speech, partial, last=False, soft=frozenset(), can_nudge=False):
     """按顺序在候选画面里放一个镜头。partial=False 要整块盖住 remaining；partial=True 取素材里最长的空闲段
     （至少 MIN_SHOT）。last=True（本槽最后一块）时不留不足 MIN_SHOT 的零头：零头没有下一块可挪。
-    返回镜头 dict，放不下返回 None。
+    返回镜头 dict（"v" 是选中的那个候选 dict 本身，layout 用它反查画面下标），放不下返回 None。
     v["reuse"] 的画面不管素材已被占用的区间（只和别的 reuse 镜头避让），avoid 里属于 soft 的素材
     （紧跟的原声段用的素材）对它不算数；前一个镜头的同素材仍然避开。"""
     for v in cands:
@@ -520,7 +529,7 @@ def _place_any(cands, clips, avoid, remaining, speech, partial, last=False, soft
             if not w and partial:
                 w = _place_in_free_segment(c, d, reuse)   # 以 at 为中心 / 网格上都放不下：直接放进最长的空闲段
         if w:
-            shot = {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1]}
+            shot = {"kind": "narr", "clip": c, "in_us": w[0], "dur_us": d, "score": w[1], "v": v}   # v：选中的候选本身
             if reuse:
                 shot["reuse"] = True
             if v.get("mute"):
@@ -614,7 +623,8 @@ def layout(plan, clips, speech, silences, file_durs, opts):
         c.used.append((a, a + d))
         if c.window_score(a, d) is None:
             report["warns"].append(f"{it['id']}：原声段 {c.clip_id} 里有坏帧（按你给的范围保留）")
-        shots[k] = [{"kind": "live", "clip": c, "in_us": a, "dur_us": d, "score": round(c.window_score(a, d) or 0, 3)}]
+        shots[k] = [{"kind": "live", "clip": c, "in_us": a, "dur_us": d, "score": round(c.window_score(a, d) or 0, 3),
+                     "item": it["id"], "vis": None}]
 
     # 2. 再按成片顺序给 line 铺画面
     line_slots = [k for k, s in enumerate(sl) if not s["live"]]
@@ -626,6 +636,13 @@ def layout(plan, clips, speech, silences, file_durs, opts):
         it = items[s["item"]]
         L = s["end_us"] - s["start_us"]
         vis = it.get("visuals", [])
+
+        def own_src(sh, it=it, vis=vis):
+            """新建的镜头记来源：属于哪一项、实际选中的是第几个画面（按对象认；借来的、pick_one 的是 None）。
+            被 _extend 延长的镜头不经过这里，保持原来的来源。"""
+            v = sh.pop("v", None)
+            sh["item"], sh["vis"] = it["id"], next((j for j, x in enumerate(vis) if x is v), None)
+            return sh
         # 紧跟着的原声段用的素材：这一槽的最后一个镜头不能是它，否则同一素材前后相邻
         next_live = items[sl[k + 1]["item"]]["clip_id"] if k + 1 < len(sl) and sl[k + 1]["live"] else None
         if prev_shot is not None and (L < MIN_SHOT or not vis):
@@ -680,6 +697,8 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                     return p_ or _place_any(neighbours + [{"clip_id": c.clip_id} for c in pool_],
                                             clips, avoid, rem, speech, True, tail, soft, nudge_ok)
                 placed = place(remaining)
+                if placed is not None:
+                    own_src(placed)
                 if placed is None:
                     raise ValueError(f"章节 {it['chapter']}（{it['id']}）没有可用的素材来铺这句旁白："
                                      f"本句和相邻句的画面都被占用或不够 {MIN_SHOT / US:g}s，给这句多配一两个画面")
@@ -706,6 +725,7 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                         if placed["dur_us"] - cut >= MIN_SHOT and _extend(placed, -cut):
                             nxt = place(MIN_SHOT, avoid={placed["clip"].clip_id} | ({next_live} if next_live else set()))
                             if nxt is not None:
+                                own_src(nxt)
                                 if nxt["clip"].clip_id not in {v["clip_id"] for v in own}:
                                     report["fallback"].append((it["id"], nxt["clip"].clip_id))
                                 got.append(nxt)
@@ -718,8 +738,9 @@ def layout(plan, clips, speech, silences, file_durs, opts):
         shots[k] = got
         prev_shot = got[-1]
 
-    # 3. 输出
+    # 3. 输出（srcs 与 rows 一一对应；slots 是零头挤过之后的最终槽，fx 按它们算）
     rows, t = [], 0
+    report["srcs"], report["slots"] = [], [dict(s) for s in sl]
     for k, s in enumerate(sl):
         it = items[s["item"]]
         report["items"].append({"item": it["id"], "start_us": s["start_us"], "end_us": s["end_us"],
@@ -734,6 +755,7 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                          "in_s": round(sh["in_us"] / US, 3), "dur_s": round(sh["dur_us"] / US, 3),
                          "start_s": round(t / US, 3), "in_us": sh["in_us"], "dur_us": sh["dur_us"],
                          "start_us": t, "score": sh["score"], "mute": "1" if sh.get("mute") else ""})
+            report["srcs"].append({"item": sh["item"], "vis": sh["vis"]})
             t += sh["dur_us"]
     track = {"audio": [dict(a, file=plan["files"][a["fid"]]) for a in tl["audio"]],
              "subs": [], "speech": [], "live": [], "bgm": [], "total_us": tl["total_us"]}
@@ -787,7 +809,7 @@ def note_at(notes, cid, t_s):
     return ""
 
 
-def _print_report(plan, rows, track, report, notes):
+def _print_report(plan, rows, track, report, notes, fx_notes=None):
     items = {it["id"]: it for it in plan["items"]}
     print(f"成片 {fmt(track['total_us'])}，{len(rows)} 个镜头，旁白 {len(track['audio'])} 段，原声段 {len(track['live'])} 个")
     for e in report["items"]:
@@ -798,6 +820,8 @@ def _print_report(plan, rows, track, report, notes):
         for cid, a, d, flags in e["shots"]:
             tag = ("（重复用）" if flags.get("reuse") else "") + ("（消音）" if flags.get("mute") else "")
             print(f"      {cid}@{a / US:.1f}s +{d / US:.1f}s{tag}  {note_at(notes, cid, (a + d / 2) / US)[:30]}")
+        for x in (fx_notes or {}).get(e["item"], []):
+            print(f"      ⤷ {x}")
     for iid, why in report["skipped"]:
         print(f"  跳过 {iid}「{items[iid].get('text', '')[:20]}」：{why}")
     for iid, cid in report["fallback"]:
@@ -806,6 +830,9 @@ def _print_report(plan, rows, track, report, notes):
         print(f"  ⚠ 没配画面、延续上一个镜头的句子：{'、'.join(report['unpaired'])}")
     for w in report["warns"]:
         print(f"  ⚠ {w}")
+    vip = fx.vip_list(track["fx"]) if track.get("fx") else []
+    if vip:
+        print(f"  会员：{'、'.join(vip)}")
 
 
 def main(argv=None):
@@ -854,8 +881,14 @@ def main(argv=None):
         print(str(e), file=sys.stderr)
         return 1
     report["warns"] = warns + report["warns"]
+    fx_notes = {}
+    if fx.has_fx(plan):    # 校验时已经读通过目录
+        fxd, fx_warns, fx_notes = fx.compute_fx(plan, rows, report["srcs"], report["slots"], fx.load_catalog())
+        report["warns"] += fx_warns
+        if fxd is not None:
+            track["fx"] = fxd
     notes = _load(os.path.join(W, "scene_notes.json"), {}) or {}
-    _print_report(plan, rows, track, report, notes)
+    _print_report(plan, rows, track, report, notes, fx_notes)
     if args.dry_run:
         print("（dry-run，没写文件）")
         return 0

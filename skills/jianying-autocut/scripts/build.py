@@ -36,6 +36,8 @@ from collections import Counter
 import pyJianYingDraft as jy
 from pyJianYingDraft import Timerange, TrackSpec, TrackType
 
+import fx
+import fx_draft
 import loudness
 import normalize
 from common import DRAFTS_DIR, US, detect_versions, jianying_running, load_json, read_csv
@@ -419,6 +421,8 @@ def verify(draft_dir, shots, versions, bgm_expected, narr_expected=0):
             for ref in seg.get("extra_material_refs", []):
                 if ref not in ids:
                     errs.append(f"{t['type']} 轨片段有悬空引用 {ref}")
+            if t["type"] == "effect" and seg.get("material_id") not in ids:
+                errs.append(f"effect 轨片段有悬空引用 {seg.get('material_id')}")
     for m in mats["videos"] + mats.get("audios", []):
         if not os.path.exists(m["path"]):
             errs.append(f"素材不存在 {m['path']}")
@@ -478,9 +482,19 @@ def main():
     for s in shots:
         s["clip_id"] = inv[s["source"]]["clip_id"]
     subs, sub_warns = [], []
-    narr = None
+    narr = fxd = None
     if args.narration:
         narr = load_json(args.narration, kind=dict)
+        fxd = narr.get("fx")
+        if fxd:   # 效果和镜头对不上就在动旧草稿之前退出
+            try:
+                fx_cat = fx.load_catalog()
+            except ValueError as e:
+                sys.exit(str(e))
+            fx_errs = fx_draft.preflight(fxd, shots, fx_cat)
+            if fx_errs:
+                sys.exit("效果和镜头对不上：\n  " + "\n  ".join(fx_errs))
+            fx_at = fx_draft.by_shot(fxd)
         vo = load_json(os.path.join(args.work, "narration_speech.json"), kind=dict)
         vo_durs = {p: round(vo["durations"][fid] * US) for fid, p in vo["files"].items() if fid in vo["durations"]}
         missing_vo = [a["file"] for a in narr["audio"] if a["file"] not in vo_durs or not os.path.exists(a["file"])]
@@ -543,7 +557,11 @@ def main():
             vol = max(volume, SPEECH_VOLUME) if talks else volume
         seg = jy.VideoSegment(mats[src], Timerange(t0, dur), source_timerange=Timerange(int(s["in_us"]), dur),
                               volume=vol, clip_settings=cs)
+        if fxd:   # 必须在 add_segment 之前：材料只在入轨那一刻收进草稿
+            fx_draft.attach(seg, fx_at.get(int(s["idx"]), []), fx_cat)
         script.add_segment(seg, main_track)
+    if fxd:
+        fx_draft.add_effects(script, fxd, fx_cat)
     total = sum(int(s["dur_us"]) for s in shots)
 
     narr_count = 0
@@ -673,6 +691,8 @@ def main():
             sub_warns.append("没测成响度（需要 ffmpeg），人声和 BGM 的音量差没有校验")
 
     errs, d = verify(draft_dir, shots, versions, bgm_count, narr_count)
+    if fxd:
+        errs += fx_draft.verify_fx(d, fxd, fx_cat)
     sec = d["duration"] / US
     print(f"\n草稿：{draft_dir}")
     print(f"  {len(shots)} 个镜头 / {len(mats)} 段素材 / {len({s['chapter'] for s in shots})} 章"
@@ -684,7 +704,10 @@ def main():
         for e in errs:
             print("  ✗", e)
         sys.exit(1)
-    print("  ✓ 零缝隙零重叠 ✓ 时长精确 ✓ 无悬空引用 ✓ 素材零复制 ✓ 版本号对齐" + (" ✓ BGM 铺满不越界" if bgm_count else ""))
+    print("  ✓ 零缝隙零重叠 ✓ 时长精确 ✓ 无悬空引用 ✓ 素材零复制 ✓ 版本号对齐" + (" ✓ BGM 铺满不越界" if bgm_count else "")
+          + (" ✓ 效果逐个对上" if fxd else ""))
+    if fxd:
+        print("  效果：" + fx_draft.summary(fxd))
     if narr is not None:
         print(f"  旁白 {narr_count} 段 / 原声段 {len(narr['live'])} 个 / 字幕 {len(subs)} 条")
         for n in mix_notes:
