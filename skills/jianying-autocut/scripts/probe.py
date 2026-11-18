@@ -130,6 +130,19 @@ def probe(path, use_ffprobe):
     return meta, None
 
 
+def scan_videos(root, work):
+    """root 下的视频文件（排好序），跳过工作目录 work 里的（LUT 副本、归一化副本等派生文件）。
+    比较用 realpath：work 写成带 .. 或经过符号链接也认得出来。返回的路径保持 root 的写法不变，
+    因为 inventory 里的 clip_id 按路径认，换写法会把原有素材重新编号。"""
+    real_work = os.path.realpath(work)
+    def in_work(d):
+        r = os.path.realpath(d)
+        return r == real_work or r.startswith(real_work + os.sep)
+    return sorted(
+        os.path.join(d, f) for d, ds, fs in os.walk(root) if not in_work(d) for f in fs
+        if os.path.splitext(f)[1].lower() in VIDEO_EXTS and not f.startswith("._"))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("folder")
@@ -138,10 +151,7 @@ def main():
 
     root = os.path.abspath(os.path.expanduser(args.folder))
     work = args.work or default_work(root)
-    files = sorted(
-        os.path.join(d, f) for d, ds, fs in os.walk(root) for f in fs
-        if os.path.splitext(f)[1].lower() in VIDEO_EXTS and not f.startswith("._")
-        and os.path.abspath(d) != work and not os.path.abspath(d).startswith(work + os.sep))
+    files = scan_videos(root, work)
     if not files:
         sys.exit(f"{root} 下没找到视频文件")
 

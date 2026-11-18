@@ -125,6 +125,8 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
 .prompter .say { font-size: 1.6rem; line-height: 1.6; margin: 0; overflow-wrap: anywhere; }
 .prompter .say small { font-family: var(--font-mono); font-size: .9rem; color: var(--muted); margin-left: 8px; }
 .prompter .cue { font-size: 1.05rem; color: var(--warn); margin: 0; }
+.prompter .say.todo { background: var(--warn-bg); border-left: 4px solid var(--warn); border-radius: 0 8px 8px 0; padding: 4px 12px; }
+.todo-tag { display: inline-block; vertical-align: middle; font-size: .8rem; font-weight: 700; color: var(--warn); border: 1px solid var(--warn); border-radius: 99px; padding: 0 8px; margin-right: 10px; line-height: 1.6; }
 @media (prefers-reduced-motion: reduce) { .chev { transition: none; } }
 </style>
 
@@ -233,6 +235,8 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     const shots = allShots();
     const done = shots.filter(s => s.done).length;
     const view = currentView();
+    const rec = isNarration() ? recStats() : { done: 0, total: 0 };
+    const bar = rec.total ? rec : { done, total: shots.length };   // 旁白片拍完以后，要盯的是录音进度
     let banner = "";
     if (S.status === "nodb") banner = "现在连不上脚本数据：请登录 claude.ai 后重新打开这个页面。";
     else if (S.status === "timeout") banner = "数据还没加载出来，网络可能不太好。刷新一下再试。";
@@ -251,8 +255,9 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       </div>
       ${m.intent ? `<p class="intent">${esc(m.intent)}</p>` : ""}
       <div class="facts">${m.place ? `<span>${esc(m.place)}</span>` : ""}${m.days ? `<span>${esc(m.days)} 天</span>` : ""}
-        ${shots.length ? `<span>已拍 <b class="mono">${done}/${shots.length}</b></span>` : ""}</div>
-      ${shots.length ? `<div class="progress" aria-hidden="true"><i style="width:${(done / shots.length * 100).toFixed(1)}%"></i></div>` : ""}
+        ${shots.length ? `<span>已拍 <b class="mono">${done}/${shots.length}</b></span>` : ""}
+        ${rec.total ? `<span>已录 <b class="mono">${rec.done}/${rec.total}</b></span>` : ""}</div>
+      ${bar.total ? `<div class="progress" aria-hidden="true"><i style="width:${(bar.done / bar.total * 100).toFixed(1)}%"></i></div>` : ""}
       ${banner ? `<p class="banner" role="status">${esc(banner)}</p>` : ""}
     </header>`;
   }
@@ -393,13 +398,29 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   }
 
   // ---------- 录音稿（提词器） ----------
+  // 一句旁白算「已录」：nmatch 里有它（原声段不用录，不计入）
+  const recorded = l => !!S.nmatch[l.id];
+  function recStats() {
+    const ls = Object.entries(S.lines).map(([id, l]) => ({ ...l, id })).filter(l => l.kind !== "live");
+    return { done: ls.filter(recorded).length, total: ls.length };
+  }
+
   function scriptView() {
-    return `<div class="prompter">` + chapters().map((c, i) => {
+    const todo = chapters().map((c, i) => ({ c, i, n: linesOf(c.id).filter(l => l.kind !== "live" && !recorded(l)).length })).filter(x => x.n);
+    const todoN = todo.reduce((a, x) => a + x.n, 0);
+    // 录音之前（nmatch 还是空的）不提示：那时整份稿子都是待录
+    const summary = !Object.keys(S.nmatch).length ? "" : todoN
+      ? `<p class="banner">还有 <b class="mono">${todoN}</b> 句待录：${todo.map(x => `${x.i + 1} ${esc(x.c.title)}（${x.n} 句）`).join("、")}。下面标黄的就是。</p>`
+      : `<p class="muted">所有旁白都录好了。</p>`;
+    const mark = Object.keys(S.nmatch).length > 0;
+    return `<div class="prompter">` + summary + chapters().map((c, i) => {
       const ls = linesOf(c.id);
       if (!ls.length) return "";
       return `<section><h2>${i + 1} ${esc(c.title)}</h2>` + ls.map(l => l.kind === "live"
         ? `<p class="cue">（这里停一下，放原声：${esc(l.text || (l.shots || []).map(x => S.shots[x] && S.shots[x].desc).filter(Boolean).join("、"))}）</p>`
-        : `<p class="say">${esc(l.text)}<small>${estOf(l)}s</small></p>`).join("") + `</section>`;
+        : mark && !recorded(l)
+          ? `<p class="say todo"><span class="todo-tag">待录</span>${esc(l.text)}<small>${estOf(l)}s</small></p>`
+          : `<p class="say">${esc(l.text)}<small>${estOf(l)}s</small></p>`).join("") + `</section>`;
     }).join("") + `<p class="muted">一章录一个文件最省事；念错了停一下重说整句，剪的时候会自动取最后一遍。</p></div>`;
   }
 
@@ -418,8 +439,22 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     const m = e.m;
     if (!m) return ["bad", "没录到"];
     if (m.skip) return ["skip", "跳过"];
-    if (e.kind !== "live" && !(m.visuals || []).length) return ["bad", "没配画面"];
+    // 画面留空 = 延续上一个镜头（narrate.py 的约定）：确认过的就是有意为之，不算缺
+    if (e.kind !== "live" && !(m.visuals || []).length)
+      return m.confirmed === true ? ["ok", "延续上一镜头"] : ["bad", "没配画面"];
     return m.confirmed === true ? ["ok", "已确认"] : ["warn", "待确认"];
+  }
+
+  // 往前找最近一句配了画面的旁白（跳过原声段和跳过的句子），取它的最后一个画面：留空的句子在成片里放的就是它
+  function carriedVisual(e) {
+    const es = narrEntries();
+    for (let i = es.findIndex(x => x.id === e.id) - 1; i >= 0; i--) {
+      const m = es[i].m;
+      if (es[i].kind === "live" || !m || m.skip) continue;
+      const vs = m.visuals || [];
+      if (vs.length) return vs[vs.length - 1];
+    }
+    return null;
   }
 
   function narrEditView() {
@@ -441,6 +476,14 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     </div>`;
   }
 
+  function carriedNote(e, m) {
+    const cv = carriedVisual(e);
+    const card = cv ? `<div class="card"><b class="mono">延续 ${esc(cv.clip_id)}</b>${thumbs(cv.clip_id)}${S.clips[cv.clip_id] && S.clips[cv.clip_id].desc ? `<p class="tips">${esc(S.clips[cv.clip_id].desc)}</p>` : ""}</div>` : "";
+    return m.confirmed === true
+      ? `<p>这句不换画面，接着放上一句的镜头${cv ? `（${esc(cv.clip_id)}）` : ""}。想换就在下面选一段素材。</p>${card}`
+      : `<p>这句还没配画面：在下面选一段素材，或者确认留空，成片里会延续上一个镜头。</p>${card}`;
+  }
+
   function narrPanel(e) {
     const m = e.m, id = esc(e.id);
     const [cls, label] = narrState(e);
@@ -456,7 +499,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         ${m.skip_reason ? `<dt>跳过原因</dt><dd>${esc(m.skip_reason)}</dd>` : ""}
         ${m.reason ? `<dt>理由</dt><dd>${esc(m.reason)}</dd>` : ""}
         <dt>把握</dt><dd>${CONF[m.confidence] || "—"}${m.by === "user" ? " · 你改过" : " · Claude 建议"}</dd></dl>
-      ${vis || (e.kind === "live" ? "" : `<p>这句还没配画面：在下面选一段素材，或者留空，成片里会延续上一个镜头。</p>`)}
+      ${vis || (e.kind === "live" ? "" : carriedNote(e, m))}
       <div class="row">${m.skip ? `<button class="primary" data-act="skip-n" data-id="${id}" data-v="0" ${dis()}>恢复这句</button>` :
         `${m.confirmed === true ? `<button data-act="unconfirm-n" data-id="${id}" ${dis()}>取消确认</button>` : `<button class="primary" data-act="confirm-n" data-id="${id}" ${dis()}>确认</button>`}
          <button data-act="skip-n" data-id="${id}" data-v="1" ${dis()}>不要这句</button>`}${fail ? `<span class="unsaved">未保存</span>` : ""}</div>
