@@ -125,7 +125,7 @@ const R = {};
   click({ act: "fx-remove", kind: "transition", id: "L01" }); await tick();
   R.removeWritesNull = calls.some((c) => c.path === "nmatch/L01" && "transition" in c.data && c.data.transition === null);
 
-  // 去掉滤镜：写出的画面对象里没有 filter 键；失败后马上勾「消音」再重试，滤镜不会复活
+  // 去掉滤镜：写出的画面对象里 filter 是 null；失败后马上勾「消音」再重试，滤镜不会复活
   const withFilt = base([{ clip_id: "c001", filter: FILT }]);
   fire("nmatch", withFilt);
   failOnce.add("nmatch/L01");
@@ -134,7 +134,7 @@ const R = {};
   calls.length = 0;
   change("L01", "mute", 0, true); await tick();
   const vs = calls.filter((c) => c.path === "nmatch/L01" && c.data.visuals);
-  R.removeFilterNoResurrection = vs.length > 0 && vs.every((c) => !("filter" in c.data.visuals[0])) && vs[vs.length - 1].data.visuals[0].mute === true;
+  R.removeFilterNoResurrection = vs.length > 0 && vs.every((c) => c.data.visuals[0].filter === null) && vs[vs.length - 1].data.visuals[0].mute === true;
 
   // 片头 / 片尾：在剪辑视图顶部，分别写进 plan/meta，互不覆盖
   fire("plan", { meta: { title: "t", kind: "narration", stage: "editing", intro: { type: "渐显", confirmed: false, by: "claude" },

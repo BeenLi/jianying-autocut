@@ -544,9 +544,8 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       kind, ctx, obj: (curVis(id)[i] || {}).filter,
       put: o => writeVis(id, curVis(id).map((v, k) => {
         if (k !== i) return v;
-        const n = { ...v };
-        if (o) n.filter = o; else delete n.filter;      // 去掉滤镜：删掉键，不写 null（visuals 里的对象原样导出）
-        return n;
+        return { ...v, filter: o };   // 去掉滤镜写 null：表示用户主动去掉，Claude 之后不再建议；导出时跳过
+
       }), { by: "user" }),
     };
     return { kind, ctx, obj: (S.nmatch[id] || {})[kind], put: o => write("nmatch/" + id, { [kind]: o }) };
@@ -810,7 +809,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       if (at !== null) nv.at = at;
       if (v0 && v0.clip_id === clip) {
         for (const f of ["reuse", "mute"]) if (v0[f] === true) nv[f] = true;
-        if (v0.filter) nv.filter = v0.filter;
+        if (v0.filter !== undefined) nv.filter = v0.filter;   // 包括 null（用户去掉过）
       }
       writeVis(id, [nv], { confirmed: true, by: "user", confidence: null, reason: "" });
     },
