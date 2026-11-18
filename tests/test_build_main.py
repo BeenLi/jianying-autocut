@@ -459,3 +459,20 @@ def test_no_fx_no_effect_track(tmp_path, monkeypatch):
     assert not _segs(d, "特效") and not any(t["type"] == "effect" for t in d["tracks"])
     assert m["transitions"] == [] and m["video_effects"] == [] and m["material_animations"] == []
     assert [e for e in m["effects"] if e.get("type") == "filter"] == []
+
+
+def test_effect_segment_dangling_material_id(tmp_path, monkeypatch):
+    from common import detect_versions, read_csv
+    _, _, drafts, work, _ = _fx_build(tmp_path, monkeypatch)
+    p = drafts / "旁白片" / "draft_info.json"
+    d = json.loads(p.read_text())
+    next(t for t in d["tracks"] if t["type"] == "effect")["segments"][0]["material_id"] = "nope"
+    p.write_text(json.dumps(d, ensure_ascii=False))
+    errs, _ = build.verify(str(drafts / "旁白片"), read_csv(str(work / "shots.csv")), detect_versions(str(drafts)), 0, 1)
+    assert any("悬空" in e and "nope" in e for e in errs)
+
+
+def test_build_reports_fx_summary(tmp_path, monkeypatch, capsys):
+    _fx_build(tmp_path, monkeypatch)
+    out = capsys.readouterr().out
+    assert "✓ 效果逐个对上" in out and "转场 1 个、特效 1 个、滤镜 1 个、片头片尾动画 2 个" in out

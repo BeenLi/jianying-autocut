@@ -95,3 +95,65 @@ def summary(f):
     s = f"转场 {n['transitions']} 个、特效 {n['effects']} 个、滤镜 {n['filters']} 个、片头片尾动画 {anim} 个"
     vip = fx.vip_list(f)
     return s + (f"；会员：{'、'.join(vip)}" if vip else "")
+
+
+INTENSITY_TOL = 1e-6
+
+
+def verify_fx(d, f, catalog):
+    """读回的 draft_info.json 与 fx 逐个对上（双向）。返回错误列表。
+    读回路径（pyJianYingDraft@69cee12 实测）：
+      转场  materials.transitions[]，片段 extra_material_refs 引用；name / resource_id / duration
+      滤镜  materials.effects[] 里 type == "filter"，片段 extra_material_refs 引用；强度存在 value（60 → 0.6）
+      动画  materials.material_animations[].animations[]，type "in" / "out"，start 相对片段开头
+      特效  effect 轨片段 material_id → materials.video_effects[]；target_timerange"""
+    m = d["materials"]
+    trans = {x["id"]: x for x in m.get("transitions", [])}
+    filts = {x["id"]: x for x in m.get("effects", []) if x.get("type") == "filter"}
+    anims = {x["id"]: x for x in m.get("material_animations", [])}
+    video = [t for t in d["tracks"] if t["type"] == "video"][0]["segments"]
+    exp = by_shot(f)
+    errs = []
+
+    def rid(kind, name):
+        return catalog[kind][name]["resource_id"]
+
+    for n, seg in enumerate(video, 1):
+        refs = seg.get("extra_material_refs", [])
+        dur = seg["target_timerange"]["duration"]
+        want = exp.get(n, [])
+        got = [("transition", (trans[r]["name"], trans[r]["resource_id"], trans[r]["duration"])) for r in refs if r in trans]
+        got += [("filter", (filts[r]["name"], filts[r]["resource_id"], filts[r]["value"])) for r in refs if r in filts]
+        got += [({"in": "intro", "out": "outro"}.get(a["type"], a["type"]), (a["name"], a["resource_id"], a["start"], a["duration"]))
+                for r in refs if r in anims for a in anims[r]["animations"]]
+        for kind in ("transition", "filter", "intro", "outro"):
+            w = [e for k, e in want if k == kind]
+            g = [x for k, x in got if k == kind]
+            label = fx.LABEL[kind]
+            if len(w) != len(g):
+                errs.append(f"第 {n} 个片段：{label}应有 {len(w)} 个，草稿里有 {len(g)} 个")
+                continue
+            for e, x in zip(w, g):
+                if (x[0], x[1]) != (e["type"], rid(kind, e["type"])):
+                    errs.append(f"第 {n} 个片段：{label}应是 {e['type']}，草稿里是 {x[0]}（{x[1]}）")
+                elif kind == "transition" and x[2] != e["dur_us"]:
+                    errs.append(f"第 {n} 个片段：转场 {e['type']} 时长 {x[2]} ≠ {e['dur_us']}")
+                elif kind == "filter" and abs(x[2] - e["intensity"] / 100) > INTENSITY_TOL:
+                    errs.append(f"第 {n} 个片段：滤镜 {e['type']} 强度 {x[2]} ≠ {e['intensity'] / 100}")
+                elif kind in ("intro", "outro"):
+                    start = 0 if kind == "intro" else dur - e["dur_us"]
+                    if (x[2], x[3]) != (start, e["dur_us"]) or x[2] < 0 or x[2] + x[3] > dur:
+                        errs.append(f"第 {n} 个片段：{label} {e['type']} 在 {x[2]}+{x[3]}，应在 {start}+{e['dur_us']}（片段长 {dur}）")
+    # 没挂在任何主轨片段上的效果材料也算多出来的
+    used = {r for seg in video for r in seg.get("extra_material_refs", [])}
+    for what, mats in (("转场", trans), ("滤镜", filts)):
+        for i in set(mats) - used:
+            errs.append(f"草稿里多出一个没挂在主轨上的{what} {mats[i]['name']}")
+    vfx = {x["id"]: x for x in m.get("video_effects", [])}
+    got = sorted((s["target_timerange"]["start"], s["target_timerange"]["duration"],
+                  vfx.get(s.get("material_id"), {}).get("name"), vfx.get(s.get("material_id"), {}).get("resource_id"))
+                 for t in d["tracks"] if t["type"] == "effect" for s in t["segments"])
+    want = sorted((e["start_us"], e["dur_us"], e["type"], rid("effect", e["type"])) for e in f.get("effects", []))
+    if got != want:
+        errs.append(f"特效轨对不上：应有 {[(a, b, c) for a, b, c, _ in want]}，草稿里是 {[(a, b, c) for a, b, c, _ in got]}")
+    return errs

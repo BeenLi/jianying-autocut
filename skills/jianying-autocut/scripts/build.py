@@ -421,6 +421,8 @@ def verify(draft_dir, shots, versions, bgm_expected, narr_expected=0):
             for ref in seg.get("extra_material_refs", []):
                 if ref not in ids:
                     errs.append(f"{t['type']} 轨片段有悬空引用 {ref}")
+            if t["type"] == "effect" and seg.get("material_id") not in ids:
+                errs.append(f"effect 轨片段有悬空引用 {seg.get('material_id')}")
     for m in mats["videos"] + mats.get("audios", []):
         if not os.path.exists(m["path"]):
             errs.append(f"素材不存在 {m['path']}")
@@ -689,6 +691,8 @@ def main():
             sub_warns.append("没测成响度（需要 ffmpeg），人声和 BGM 的音量差没有校验")
 
     errs, d = verify(draft_dir, shots, versions, bgm_count, narr_count)
+    if fxd:
+        errs += fx_draft.verify_fx(d, fxd, fx_cat)
     sec = d["duration"] / US
     print(f"\n草稿：{draft_dir}")
     print(f"  {len(shots)} 个镜头 / {len(mats)} 段素材 / {len({s['chapter'] for s in shots})} 章"
@@ -700,7 +704,10 @@ def main():
         for e in errs:
             print("  ✗", e)
         sys.exit(1)
-    print("  ✓ 零缝隙零重叠 ✓ 时长精确 ✓ 无悬空引用 ✓ 素材零复制 ✓ 版本号对齐" + (" ✓ BGM 铺满不越界" if bgm_count else ""))
+    print("  ✓ 零缝隙零重叠 ✓ 时长精确 ✓ 无悬空引用 ✓ 素材零复制 ✓ 版本号对齐" + (" ✓ BGM 铺满不越界" if bgm_count else "")
+          + (" ✓ 效果逐个对上" if fxd else ""))
+    if fxd:
+        print("  效果：" + fx_draft.summary(fxd))
     if narr is not None:
         print(f"  旁白 {narr_count} 段 / 原声段 {len(narr['live'])} 个 / 字幕 {len(subs)} 条")
         for n in mix_notes:
