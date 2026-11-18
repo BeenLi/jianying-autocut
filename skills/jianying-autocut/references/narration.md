@@ -98,7 +98,7 @@
 
 页面的 db 结构见 `shoot_plan.md` 的 `lines` / `nmatch`。
 
-- **拍摄前（模式 A）**：每章写 `lines`（旁白稿，完整句子，约 4 字/秒），`kind: "live"` 的句子表示"这里放原声"并关联口播镜头。页面上有"录音稿"视图当提词器，用户一章录一个文件最省事。
+- **拍摄前（模式 A）**：每章写 `lines`（旁白稿，完整句子，约 4 字/秒），`kind: "live"` 的句子表示"这里放原声"并关联口播镜头。页面上有"录音稿"视图当提词器，用户一章录一个文件最省事；开始对照录音以后（nmatch 有内容），没录到的句子在录音稿里标黄「待录」，顶部显示「已录 x/y」。剪辑视图里画面留空并确认的句子显示「延续上一镜头」，带出它实际延续的画面。
 - **剪辑时**：`plan/meta.kind` 改成 `"narration"`，`stage` 改成 `"editing"`；转写、`--draft` 之后，把每句写进 `nmatch/<line_id>`（稿外的转写句用新 id，自带 `chapter`、`order`、`text`），给出 `visuals` 建议。用户在页面上确认、换画面、改时间、标跳过 / 恢复。
 - **导出**：`ArtifactData list` 读出 `chapters`、`lines`、`nmatch`（分页返回：有 `next` 就继续读，读完再写），按章节 `order`、句子 `order` 排成 `items`：`line` 取 `nmatch` 的 `file/start/end/skip/visuals`（`visuals` 里页面勾的 `reuse` / `mute` 原样带上），文字用稿子（`lines.text`）；`kind: "live"` 的句子展开成 `live` 项（素材和区间取自它的 `nmatch`）。写 `W/narration_plan.json`，再跑 N5。
 - 没有页面时直接改 `narration_plan.json`，把 `--dry-run` 的输出给用户看。
