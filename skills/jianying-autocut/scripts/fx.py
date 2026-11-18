@@ -31,9 +31,27 @@ def load_catalog(path=None):
     path = path or CATALOG_PATH
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            cat = json.load(f)
     except (OSError, ValueError) as e:
         raise ValueError(f"效果目录 {path} 读不了：重跑 fx_catalog.py（{e}）") from None
+    bad = _catalog_problem(cat)
+    if bad:
+        raise ValueError(f"效果目录 {path} 结构不对（{bad}）：重跑 fx_catalog.py")
+    return cat
+
+
+def _catalog_problem(cat):
+    """目录结构的第一个问题；没问题返回 None。结构坏了的目录不能当成「名字不存在」报给用户。"""
+    if not isinstance(cat, dict):
+        return "顶层不是对象"
+    for kind in KEYS:
+        if not isinstance(cat.get(kind), dict) or not cat[kind]:
+            return f"缺少 {kind}"
+        need = ("member", "resource_id", "vip") + (("dur",) if kind in ("transition", "intro", "outro") else ())
+        for name, e in cat[kind].items():
+            if not isinstance(e, dict) or any(k not in e for k in need):
+                return f"{kind}/{name} 缺字段"
+    return None
 
 
 def _item_fx(it):

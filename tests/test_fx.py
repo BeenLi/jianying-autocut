@@ -305,3 +305,13 @@ def test_shots_sig_sensitive(field, val):
 def test_shots_sig_csv_strings_equal():
     as_csv = [{k: str(v) for k, v in r.items()} for r in _ROWS]
     assert fx.shots_sig(as_csv) == fx.shots_sig(_ROWS) and fx.shots_sig(_ROWS).startswith("sha1:")
+
+
+@pytest.mark.parametrize("content", ["[]", "{}", '{"transition": []}',
+                                     json.dumps({**CAT, "transition": {"叠化": {"member": "叠化", "resource_id": "1", "vip": False}}},
+                                                ensure_ascii=False)])
+def test_load_catalog_bad_structure(tmp_path, content):          # 终审 Important 1
+    p = tmp_path / "cat.json"
+    p.write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError, match="重跑 fx_catalog.py"):
+        fx.load_catalog(str(p))

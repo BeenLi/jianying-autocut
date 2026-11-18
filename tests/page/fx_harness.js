@@ -149,6 +149,23 @@ const R = {};
   fire("plan", { meta: { title: "t", kind: "narration", stage: "editing" } });
   fire("nmatch", base([{ clip_id: "c001", at: 12 }]));
   R.oldDataRenders = H().includes("凌晨四点出发") && !H().includes("✦") && !H().includes('class="fx ');
+
+  // 终审 Important 2：去掉滤镜的写入已经成功，但晚到一份写入之前的旧快照（还带着滤镜）：
+  // 待定副本不能因为「已落地」就清掉，否则紧接着勾「消音」会把滤镜写回去
+  fire("nmatch", base([{ clip_id: "c001", filter: FILT }]));
+  click({ act: "sel", id: "L01" });
+  click({ act: "fx-remove", kind: "filter", id: "L01", i: "0" }); await tick();   // 成功
+  fire("nmatch", base([{ clip_id: "c001", filter: FILT }]));                    // 晚到的旧快照
+  calls.length = 0;
+  change("L01", "mute", 0, true); await tick();
+  v = (lastVis("L01") || [])[0];
+  R.staleSnapshotAfterLandedWrite = !!v && v.filter === null && v.mute === true;
+  // 之后 Claude 在别处改了这句的画面：快照既不是写入前的旧样子、也不等于副本 → 以服务器为准
+  fire("nmatch", base([{ clip_id: "c009", at: 2 }]));
+  calls.length = 0;
+  change("L01", "reuse", 0, true); await tick();
+  v = (lastVis("L01") || [])[0];
+  R.laterServerChangeWins = !!v && v.clip_id === "c009" && v.reuse === true;
   console.log(JSON.stringify(R));
   process.exit(Object.values(R).every(Boolean) ? 0 : 1);
 })();
