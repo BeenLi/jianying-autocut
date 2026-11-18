@@ -36,6 +36,8 @@ from collections import Counter
 import pyJianYingDraft as jy
 from pyJianYingDraft import Timerange, TrackSpec, TrackType
 
+import fx
+import fx_draft
 import loudness
 import normalize
 from common import DRAFTS_DIR, US, detect_versions, jianying_running, load_json, read_csv
@@ -478,9 +480,19 @@ def main():
     for s in shots:
         s["clip_id"] = inv[s["source"]]["clip_id"]
     subs, sub_warns = [], []
-    narr = None
+    narr = fxd = None
     if args.narration:
         narr = load_json(args.narration, kind=dict)
+        fxd = narr.get("fx")
+        if fxd:   # 效果和镜头对不上就在动旧草稿之前退出
+            try:
+                fx_cat = fx.load_catalog()
+            except ValueError as e:
+                sys.exit(str(e))
+            fx_errs = fx_draft.preflight(fxd, shots, fx_cat)
+            if fx_errs:
+                sys.exit("效果和镜头对不上：\n  " + "\n  ".join(fx_errs))
+            fx_at = fx_draft.by_shot(fxd)
         vo = load_json(os.path.join(args.work, "narration_speech.json"), kind=dict)
         vo_durs = {p: round(vo["durations"][fid] * US) for fid, p in vo["files"].items() if fid in vo["durations"]}
         missing_vo = [a["file"] for a in narr["audio"] if a["file"] not in vo_durs or not os.path.exists(a["file"])]
@@ -543,7 +555,11 @@ def main():
             vol = max(volume, SPEECH_VOLUME) if talks else volume
         seg = jy.VideoSegment(mats[src], Timerange(t0, dur), source_timerange=Timerange(int(s["in_us"]), dur),
                               volume=vol, clip_settings=cs)
+        if fxd:   # 必须在 add_segment 之前：材料只在入轨那一刻收进草稿
+            fx_draft.attach(seg, fx_at.get(int(s["idx"]), []), fx_cat)
         script.add_segment(seg, main_track)
+    if fxd:
+        fx_draft.add_effects(script, fxd, fx_cat)
     total = sum(int(s["dur_us"]) for s in shots)
 
     narr_count = 0
