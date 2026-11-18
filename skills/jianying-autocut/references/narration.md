@@ -11,6 +11,7 @@
 | N1 | `transcribe.py --work W --narration <旁白文件或目录> --context "<背景>"` | `narration_speech.json`（逐句、逐字时间、静音段；**不过滤重复句**，重复的是重录） |
 | N2 | `narrate.py --work W --draft [--script W/narration_script.json]` | `narration_plan.json` 初稿：每句一个 `line`，重录 / 口误默认 `skip` |
 | N3 | **你来配画面**：按句子内容和 `scene_notes` 给每个 `line` 写 `visuals`，需要原声的地方插 `live`，按故事需要标 `bgm` | 改好的 `narration_plan.json`（或页面上的 `nmatch`） |
+| N3.5 | 配完画面后**提效果建议**：转场、画面特效、滤镜、片头 / 片尾（见「转场与特效」），每条写 `reason` | `nmatch` / `plan/meta` 里的效果对象（待确认） |
 | N4 | 有页面时发给用户确认（见下），确认后导出成 `narration_plan.json` | — |
 | N5 | `narrate.py --work W --dry-run` 给用户看 → 去掉 `--dry-run` | `shots.csv`、`narration_track.json` |
 | N6 | 确认剪映已 ⌘Q 退出 → `build.py --work W --name <草稿名> --narration W/narration_track.json [--bgm 歌.mp3] [--subs W/subtitles.json]` | 剪映草稿 + 自检 + 响度报告 |
@@ -52,6 +53,7 @@
 | `skip` | 不进成片，但留着，用户可以恢复 |
 | `bgm` | `"drop"`：这一项期间 BGM 淡出（揭晓前的留白、让现场声呼吸）；`"up"`：这一项期间 BGM 不压低（只对没有人声的 `live` 有效，比如纯画面的高潮；原声段里有人说话时会被忽略并提示）。**只在故事确实需要的地方建议，写明理由，让用户确认** |
 | `pause_after` | 这句后面的停顿秒数，覆盖自动压缩 |
+| `transition` / `effect` / `visuals[i].filter` / 顶层 `intro` / `outro` | 效果，见下一节 |
 
 ### 配画面怎么想
 
@@ -60,6 +62,39 @@
 - 呼应和闪回：结尾想回到开头那个画面、或旁白提到前面原声段里的场景时，给那个画面写 `"reuse": true`，不要复制素材文件；素材里的原声不合适就再加 `"mute": true`，不要做去音轨副本。
 - 地图动画、片头卡片、录屏先在第 3 步用 `orient.py --graphic` 标成图形素材：不判糊、首尾 0.5s 也能用，一个 21s 的动画能整段放进一个镜头（槽比素材长不到 0.1s 时，零头挤给下一句，不会切出闪一下的镜头）。
 - 同一素材的两个镜头尽量不相邻：旁白句之间、以及旁白句和紧跟的原声段之间都会避开（只剩这一个素材可用时例外）；指定的素材放不下时，脚本按"本句其它画面 → 相邻句的画面 → 本章出现过的素材"回退，并在 `--dry-run` 里报 ⚠ 和所选画面的描述，你看一眼是否语义错位。
+
+## 转场与特效
+
+剪映 11.8 实测能加载 pyJianYingDraft 写进去的转场、特效轨、滤镜和入场 / 出场动画（2026-11-18）。转场不改变时间轴，旁白和画面的同步不受影响。
+
+| 字段 | 含义 | 可写的键 |
+|---|---|---|
+| `item.transition` | **切进这一项时**的转场（`line`、`live` 都可以） | `type`、`dur`（秒，可省，用目录默认值）、`reason` |
+| `item.effect` | 画面特效，独立特效轨，覆盖这一项的最终槽 | `type`、`reason` |
+| `visuals[i].filter` | 这个画面产出的所有镜头都加滤镜（借来的镜头不加） | `type`、`intensity`（0–100，可省，为 100）、`reason` |
+| 顶层 `intro` / `outro` | 第一个镜头的入场 / 最后一个镜头的出场动画 | `type`、`reason` |
+
+- `type` 写剪映里的中文显示名，查 `assets/fx_catalog.json`（转场 453 个、特效 1097、滤镜 1160、入场 155、出场 124，`vip` 标会员项）。
+  名字写错时 `--dry-run` 报错并给出最接近的 3 个；多写了键也报错。第一项不能写转场（用 `intro`）。
+- 生效与否要等排完镜头：某句被上一句延长吞掉、没有自己的镜头时，它的转场、滤镜会被忽略并报 ⚠；转场截到两侧较短镜头的一半，
+  动画截到镜头长度，截完不到 0.1s 的忽略。`--dry-run` 在每项后面打印「⤷ 转场 叠化 0.6s」，最后列出会员项。
+- `narration_plan.json` 里只放**已确认**的效果。没有页面时，你直接改编排，把 `--dry-run` 给用户看，认可就算确认。
+- build 会在删旧草稿前核对 `narration_track.json` 和 `shots.csv` 是否出自同一次 narrate（`shots_sig`），对不上就让你重跑 narrate；
+  生成后读回草稿逐个核对效果。
+- 升级 pyJianYingDraft 后重跑 `fx_catalog.py`，把新的 JSON 一起提交。
+
+### 建议原则
+
+配完画面（N3）之后再提，每条都写 `reason`：
+
+- **转场**只用在故事节点：章节交界；时间跳跃（「第二天一早」「晚上回到民宿」）；场景大切换（从船上到岛上）；情绪转折（美景之后突然车坏）。
+  默认用柔和的叠化类；时间跳跃可以用「闪黑」；冲击性的转折用「闪白」。其余镜头一律硬切。
+- **画面特效**只用在全片 1–3 个高潮瞬间（落水、日落最美的那一刻）。
+- **滤镜**尽量少用：烧过 LUT、或者用户会在剪映里调色的镜头不加；只在需要明显风格化的地方用（回忆片段加复古滤镜）。
+- **片头 / 片尾**：默认建议入场「渐显」、出场「渐隐」。
+- **数量**：3–4 分钟的片子，转场不超过 8 个，特效不超过 3 个（超了 `--dry-run` 会提醒）。
+- **会员项**可以用（用户是会员），效果相当时优先免费的，换账号也不会出问题。
+- 用户在页面上去掉过的效果（值是 `null`）**不要再建议**，除非用户在对话里明确要。
 
 ## 时间线规则（`narrate.py`）
 
@@ -100,5 +135,18 @@
 
 - **拍摄前（模式 A）**：每章写 `lines`（旁白稿，完整句子，约 4 字/秒），`kind: "live"` 的句子表示"这里放原声"并关联口播镜头。页面上有"录音稿"视图当提词器，用户一章录一个文件最省事；开始对照录音以后（nmatch 有内容），没录到的句子在录音稿里标黄「待录」，顶部显示「已录 x/y」。剪辑视图里画面留空并确认的句子显示「延续上一镜头」，带出它实际延续的画面。
 - **剪辑时**：`plan/meta.kind` 改成 `"narration"`，`stage` 改成 `"editing"`；转写、`--draft` 之后，把每句写进 `nmatch/<line_id>`（稿外的转写句用新 id，自带 `chapter`、`order`、`text`），给出 `visuals` 建议。用户在页面上确认、换画面、改时间、标跳过 / 恢复。
-- **导出**：`ArtifactData list` 读出 `chapters`、`lines`、`nmatch`（分页返回：有 `next` 就继续读，读完再写），按章节 `order`、句子 `order` 排成 `items`：`line` 取 `nmatch` 的 `file/start/end/skip/visuals`（`visuals` 里页面勾的 `reuse` / `mute` 原样带上），文字用稿子（`lines.text`）；`kind: "live"` 的句子展开成 `live` 项（素材和区间取自它的 `nmatch`）。写 `W/narration_plan.json`，再跑 N5。
+- **效果建议**：写进 `nmatch/<id>.transition` / `.effect`、`visuals[i].filter`、`plan/meta.intro` / `.outro`，每个效果对象是
+  `{type, dur?, intensity?, reason, vip, confirmed: false, by: "claude"}`（`vip` 按目录填）。转场、特效、片头片尾用 `update` 只写那一个字段；
+  滤镜要整个 `visuals` 数组一起写，先读最新的数组再改。值是 `null` 的字段是用户去掉的，不要覆盖。
+- **导出**：`ArtifactData list` 读出 `chapters`、`lines`、`nmatch`，再读 `plan/meta`（分页返回：有 `next` 就继续读，读完再写），按章节 `order`、句子 `order` 排成 `items`：`line` 取 `nmatch` 的 `file/start/end/skip/visuals`（`visuals` 里页面勾的 `reuse` / `mute` 原样带上），文字用稿子（`lines.text`）；`kind: "live"` 的句子展开成 `live` 项（素材和区间取自它的 `nmatch`）。效果按白名单导出，**只导出 `confirmed === true` 的**：
+
+  | 效果 | 导出的键 |
+  |---|---|
+  | `transition` | `type`、`dur`、`reason` |
+  | `effect` | `type`、`reason` |
+  | `visuals[i].filter` | `type`、`intensity`、`reason` |
+  | `intro` / `outro`（来自 `plan/meta`） | `type`、`reason` |
+
+  `vip`、`by`、`confirmed` 一律不导出（漏删了 narrate 会报「不认识的键」）；值是 `null` 的和未确认的都跳过（滤镜是 `null` 就删掉这个键），
+  把被跳过的未确认效果列给用户看。写 `W/narration_plan.json`，再跑 N5。
 - 没有页面时直接改 `narration_plan.json`，把 `--dry-run` 的输出给用户看。
