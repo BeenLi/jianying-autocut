@@ -145,7 +145,8 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
   const S = { meta: null, chapters: {}, shots: {}, clips: {}, matches: {}, extras: {}, requests: {}, lines: {}, nmatch: {},
     editingLine: null,
     loaded: new Set(), status: "loading", db: null, canWrite: true, view: null, sel: null,
-    open: {}, editing: null, editingCh: null, armDelete: null, failed: new Map(), dead: new Map(), drafts: {} };
+    open: {}, editing: null, editingCh: null, armDelete: null, failed: new Map(), dead: new Map(), drafts: {},
+    pendingVis: new Map(), inflight: new Map() };
 
   const app = document.getElementById("app");
   const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -190,9 +191,29 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       }
       render();
     };
-    const p = (queues.get(path) || Promise.resolve()).then(run);
+    S.inflight.set(path, (S.inflight.get(path) || 0) + 1);
+    const p = (queues.get(path) || Promise.resolve()).then(run).finally(() => S.inflight.set(path, S.inflight.get(path) - 1));
     queues.set(path, p);
     return p;
+  }
+
+  // ---------- 旁白句的 visuals：本地待定副本 ----------
+  // visuals 是整个数组一起写的（滤镜、重复用、消音都嵌在里面）。已经发出、服务器快照还没确认的版本留在 pendingVis，
+  // 所有 visual 操作都从它出发；否则写入失败或快照还没回来时，从旧快照拼出的数组会把刚去掉的滤镜写回去。
+  const canon = x => JSON.stringify(x, (k, v) => v && typeof v === "object" && !Array.isArray(v)
+    ? Object.fromEntries(Object.keys(v).sort().map(key => [key, v[key]])) : v);
+  const curVis = id => S.pendingVis.has(id) ? S.pendingVis.get(id) : ((S.nmatch[id] || {}).visuals || []);
+  function writeVis(id, visuals, extra = {}) {
+    S.pendingVis.set(id, visuals);
+    return write("nmatch/" + id, { visuals, ...extra });
+  }
+  // 快照到了：和待定副本一致（键顺序不算），或者这份文档的写入都已成功落地（服务器为准），就清掉待定副本
+  function settleVis() {
+    for (const [id, pv] of [...S.pendingVis]) {
+      const path = "nmatch/" + id;
+      const landed = !S.inflight.get(path) && !S.failed.has(path);
+      if (S.dead.has(path) || landed || canon((S.nmatch[id] || {}).visuals || []) === canon(pv)) S.pendingVis.delete(id);
+    }
   }
   function retryFailed() {
     for (const [path, f] of [...S.failed]) { S.failed.delete(path); write(path, f.data, f.mode); }
@@ -488,12 +509,13 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     const m = e.m, id = esc(e.id);
     const [cls, label] = narrState(e);
     const fail = S.failed.has("nmatch/" + e.id) || S.dead.has("nmatch/" + e.id);
-    const v0 = m && (m.visuals || [])[0];
+    const vlist = m ? curVis(e.id) : [];
+    const v0 = vlist[0];
     const head = `<div class="row" style="justify-content:space-between"><h2>${esc(e.text)}</h2><span class="state ${cls === "skip" ? "" : cls}">${label}</span></div>`;
     if (!m) return head + `<p>录音里没找到这句。要么补录，要么在旁白稿里删掉它。</p>`;
     // 每个画面两个勾选：允许重复用（素材已被原声段等占用也能再用）、消音（这个镜头的垫底原声关掉）
     const flag = (v, i, f, label) => `<label><input type="checkbox" id="v${f[0]}-${id}-${i}" data-act="vflag-n" data-id="${id}" data-i="${i}" data-f="${f}" ${v[f] === true ? "checked" : ""} ${dis()}>${label}</label>`;
-    const vis = (m.visuals || []).map((v, i) => `<div class="card"><b class="mono">${esc(v.clip_id)}${v.at != null ? " @ " + esc(fmt(v.at)) : ""}</b>${thumbs(v.clip_id)}${S.clips[v.clip_id] && S.clips[v.clip_id].desc ? `<p class="tips">${esc(S.clips[v.clip_id].desc)}</p>` : ""}${e.kind === "live" ? "" : `<div class="checks">${flag(v, i, "reuse", "允许重复用")}${flag(v, i, "mute", "消音")}</div>`}</div>`).join("");
+    const vis = vlist.map((v, i) => `<div class="card"><b class="mono">${esc(v.clip_id)}${v.at != null ? " @ " + esc(fmt(v.at)) : ""}</b>${thumbs(v.clip_id)}${S.clips[v.clip_id] && S.clips[v.clip_id].desc ? `<p class="tips">${esc(S.clips[v.clip_id].desc)}</p>` : ""}${e.kind === "live" ? "" : `<div class="checks">${flag(v, i, "reuse", "允许重复用")}${flag(v, i, "mute", "消音")}</div>`}</div>`).join("");
     return head + `
       <dl class="kv"><dt>录音</dt><dd class="mono">${esc(m.file || "")} ${esc(fmt(m.start))}–${esc(fmt(m.end))}</dd>
         ${m.skip_reason ? `<dt>跳过原因</dt><dd>${esc(m.skip_reason)}</dd>` : ""}
@@ -727,23 +749,26 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         return;
       }
       clearDrafts(new RegExp(`^n-(clip|at)-${id}$`));
-      // 同一素材只改时间：保留「允许重复用」「消音」；换了素材就清空
-      const v0 = ((S.nmatch[id] || {}).visuals || [])[0], nv = { clip_id: clip };
+      // 同一素材只改时间：保留「允许重复用」「消音」和滤镜；换了素材就清空
+      const v0 = curVis(id)[0], nv = { clip_id: clip };
       if (at !== null) nv.at = at;
-      if (v0 && v0.clip_id === clip) for (const f of ["reuse", "mute"]) if (v0[f] === true) nv[f] = true;
-      write("nmatch/" + id, { visuals: [nv], confirmed: true, by: "user", confidence: null, reason: "" });
+      if (v0 && v0.clip_id === clip) {
+        for (const f of ["reuse", "mute"]) if (v0[f] === true) nv[f] = true;
+        if (v0.filter) nv.filter = v0.filter;
+      }
+      writeVis(id, [nv], { confirmed: true, by: "user", confidence: null, reason: "" });
     },
     "vflag-n": el => {
       const id = el.dataset.id, i = +el.dataset.i, f = el.dataset.f, m = S.nmatch[id];
       if (!m || !["reuse", "mute"].includes(f)) return;
       // 不勾就删掉字段，不写 false / undefined（旧数据本来就没有这两个字段）
-      const visuals = (m.visuals || []).map((v, k) => {
+      const visuals = curVis(id).map((v, k) => {
         if (k !== i) return v;
         const n = { ...v };
         if (el.checked) n[f] = true; else delete n[f];
         return n;
       });
-      write("nmatch/" + id, { visuals, by: "user" });
+      writeVis(id, visuals, { by: "user" });
     },
     "retime-n": el => {
       const id = el.dataset.id, a = num(val(`n-start-${id}`)), b = num(val(`n-end-${id}`));
@@ -806,6 +831,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         const m = {};
         snap.docs.forEach(d => { if (d.exists) m[d.id] = d.data(); });
         if (col === "plan") S.meta = m.meta || null; else S[col] = m;
+        if (col === "nmatch") settleVis();
         if (!snap.metadata.fromCache) S.loaded.add(col);
         if (S.loaded.size === COLS.length && (S.status === "loading" || S.status === "timeout")) { S.status = "ready"; clearTimeout(timer); }
         render();
