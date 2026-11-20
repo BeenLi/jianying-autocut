@@ -942,6 +942,17 @@ def test_main_writes_fx_only_when_present(tmp_path):
     assert track["fx"]["transitions"][0]["item"] == "L2" and track["fx"]["intro"]["shot"] == 1
 
 
+def test_main_reads_catalog_once(tmp_path, monkeypatch):
+    import fx
+    calls = []
+    real = fx.load_catalog
+    monkeypatch.setattr(fx, "load_catalog", lambda *a, **k: calls.append(1) or real(*a, **k))
+    (tmp_path / "a").mkdir()
+    assert main(["--work", _work(tmp_path / "a")]) == 0 and calls == []          # 没有效果：不读
+    (tmp_path / "b").mkdir()
+    assert main(["--work", _work_fx(tmp_path / "b")]) == 0 and calls == [1]       # 有效果：只读一次
+
+
 def test_dry_run_prints_fx_lines(tmp_path, capsys):
     w = _work_fx(tmp_path)
     assert main(["--work", w, "--dry-run"]) == 0

@@ -869,7 +869,13 @@ def main(argv=None):
     clips, _ = load_clips(W)
     file_durs = {fid: speech_vo["durations"][fid] for fid, p in plan.get("files", {}).items()
                  if os.path.exists(p) and fid in speech_vo.get("durations", {})}
-    errs, warns = validate(plan, {cid: c.dur / US for cid, c in clips.items()}, file_durs)
+    catalog = None
+    if fx.has_fx(plan):    # 只读一次，校验和计算共用；读坏了交给 validate 报错
+        try:
+            catalog = fx.load_catalog()
+        except ValueError:
+            pass
+    errs, warns = validate(plan, {cid: c.dur / US for cid, c in clips.items()}, file_durs, catalog)
     if errs:
         print("narration_plan.json 有问题：\n  " + "\n  ".join(errs), file=sys.stderr)
         return 1
@@ -882,8 +888,8 @@ def main(argv=None):
         return 1
     report["warns"] = warns + report["warns"]
     fx_notes = {}
-    if fx.has_fx(plan):    # 校验时已经读通过目录
-        fxd, fx_warns, fx_notes = fx.compute_fx(plan, rows, report["srcs"], report["slots"], fx.load_catalog())
+    if fx.has_fx(plan):    # 校验通过说明目录读成功了
+        fxd, fx_warns, fx_notes = fx.compute_fx(plan, rows, report["srcs"], report["slots"], catalog)
         report["warns"] += fx_warns
         if fxd is not None:
             track["fx"] = fxd

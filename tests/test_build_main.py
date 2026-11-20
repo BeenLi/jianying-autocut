@@ -438,6 +438,20 @@ def test_preflight_fails_and_keeps_old_draft(tmp_path, monkeypatch, breakit):
     assert (old / "keep.txt").exists()
 
 
+def test_fx_intro_and_outro_on_one_shot(tmp_path, monkeypatch, capsys):
+    """同一个镜头（第 2 镜，3s）同时挂入场 1s 和出场 0.5s：一份动画材料里两项，起止正确、不重叠，自检通过。"""
+    patch = {"transitions": [], "effects": [], "filters": [],
+             "intro": {"shot": 2, "type": "渐显", "dur_us": 1000000, "vip": False},
+             "outro": {"shot": 2, "type": "渐隐", "dur_us": 500000, "vip": False}}
+    d, _, _, _, _ = _fx_build(tmp_path, monkeypatch, patch)
+    seg = [t for t in d["tracks"] if t["type"] == "video"][0]["segments"][1]
+    mas = [ma for ma in d["materials"]["material_animations"] if ma["id"] in seg["extra_material_refs"]]
+    assert len(mas) == 1
+    got = sorted((a["type"], a["start"], a["duration"]) for a in mas[0]["animations"])
+    assert got == [("in", 0, 1000000), ("out", 2500000, 500000)]
+    assert "✓ 效果逐个对上" in capsys.readouterr().out
+
+
 def _relocate(work, old, new):
     """派生目录的做法：把 shots.csv 和 inventory.csv 里的素材路径换成另一个位置的同名文件（clip_id 不变）。"""
     for f in ("shots.csv", "inventory.csv"):
