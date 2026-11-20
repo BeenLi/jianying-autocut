@@ -84,3 +84,67 @@ def test_verify_extra_transition_not_expected(built):
     d, f, cat = built
     f = dict(f, transitions=[])
     assert any("转场" in e for e in fx_draft.verify_fx(d, f, cat))
+
+
+# ---------- 预检：效果自身的数值（第 10 条，Codex 审出）----------
+
+_SHOTS = [{"idx": "1", "kind": "narr", "clip_id": "c001", "in_us": "0", "start_us": "0", "dur_us": "5000000"},
+          {"idx": "2", "kind": "live", "clip_id": "c002", "in_us": "0", "start_us": "5000000", "dur_us": "3000000"}]
+
+
+def _pf(patch=None):
+    from test_build_main import FULL_FX
+    f = copy.deepcopy(FULL_FX)
+    f["shots_sig"] = fx.shots_sig(_SHOTS)
+    if patch:
+        patch(f)
+    return fx_draft.preflight(f, _SHOTS, fx.load_catalog())
+
+
+def test_preflight_clean():
+    assert _pf() == []
+
+
+def test_preflight_transition_on_last_shot():
+    def p(f):
+        f["transitions"][0].update(shot=2, at_us=8000000)
+    assert any("最后一个镜头" in e for e in _pf(p))
+
+
+@pytest.mark.parametrize("val", [101, -1, "60", float("nan"), True, None])
+def test_preflight_filter_intensity(val):
+    def p(f):
+        f["filters"][0]["intensity"] = val
+    assert any("强度" in e for e in _pf(p))
+
+
+@pytest.mark.parametrize("kind", ["transitions", "effects"])
+@pytest.mark.parametrize("val", [0, -5, 1.5, True, "400000"])
+def test_preflight_bad_duration(kind, val):
+    def p(f):
+        f[kind][0]["dur_us"] = val
+    assert any("时长" in e for e in _pf(p))
+
+
+@pytest.mark.parametrize("val", [0, -5, 6000000])
+def test_preflight_animation_duration(val):
+    def p(f):
+        f["intro"]["dur_us"] = val
+    assert any("片头" in e and "时长" in e for e in _pf(p))
+
+
+def test_preflight_intro_outro_overlap_same_shot():
+    def p(f):
+        f["intro"].update(shot=2, dur_us=2000000)        # 第 2 镜 3s：入场 2s + 出场 0.5s 不重叠
+    assert _pf(p) == []
+
+    def q(f):
+        f["intro"].update(shot=2, dur_us=2600000)        # 2.6 + 0.5 > 3：重叠
+    assert any("重叠" in e for e in _pf(q))
+
+
+@pytest.mark.parametrize("kind", ["transitions", "filters"])
+def test_preflight_duplicate_on_same_shot(kind):
+    def p(f):
+        f[kind].append(copy.deepcopy(f[kind][0]))
+    assert any("重复" in e for e in _pf(p))
