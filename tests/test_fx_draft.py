@@ -86,6 +86,33 @@ def test_verify_extra_transition_not_expected(built):
     assert any("转场" in e for e in fx_draft.verify_fx(d, f, cat))
 
 
+
+# ---------- 自检：孤立的动画 / 特效材料（第 5 条）----------
+
+def test_verify_orphan_animation_material(built):
+    d, f, cat = built
+    ma = copy.deepcopy(d["materials"]["material_animations"][0])
+    ma["id"] = "orphan-anim"
+    d["materials"]["material_animations"].append(ma)
+    assert any("动画" in e and "没挂" in e for e in fx_draft.verify_fx(d, f, cat))
+
+
+def test_verify_orphan_video_effect_material(built):
+    d, f, cat = built
+    ve = copy.deepcopy(d["materials"]["video_effects"][0])
+    ve["id"] = "orphan-fx"
+    d["materials"]["video_effects"].append(ve)
+    assert any("特效" in e and "没挂" in e for e in fx_draft.verify_fx(d, f, cat))
+
+
+def test_verify_unknown_animation_type(built):
+    d, f, cat = built
+    a = copy.deepcopy(d["materials"]["material_animations"][0]["animations"][0])
+    a["type"] = "group"
+    d["materials"]["material_animations"][0]["animations"].append(a)
+    assert any("group" in e for e in fx_draft.verify_fx(d, f, cat))
+
+
 # ---------- 预检：效果自身的数值（第 10 条，Codex 审出）----------
 
 _SHOTS = [{"idx": "1", "kind": "narr", "clip_id": "c001", "in_us": "0", "start_us": "0", "dur_us": "5000000"},

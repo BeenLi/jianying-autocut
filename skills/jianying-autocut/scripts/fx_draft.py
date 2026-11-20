@@ -187,10 +187,19 @@ def verify_fx(d, f, catalog):
                         errs.append(f"第 {n} 个片段：{label} {e['type']} 在 {x[2]}+{x[3]}，应在 {start}+{e['dur_us']}（片段长 {dur}）")
     # 没挂在任何主轨片段上的效果材料也算多出来的
     used = {r for seg in video for r in seg.get("extra_material_refs", [])}
-    for what, mats in (("转场", trans), ("滤镜", filts)):
-        for i in set(mats) - used:
-            errs.append(f"草稿里多出一个没挂在主轨上的{what} {mats[i]['name']}")
+    # 动画材料按所有轨道的引用算：以后字幕挂了入场动画，不算孤立
+    used_any = {r for t in d["tracks"] for seg in t["segments"] for r in seg.get("extra_material_refs", [])}
+    for what, mats, refs in (("转场", trans, used), ("滤镜", filts, used), ("动画", anims, used_any)):
+        for i in set(mats) - refs:
+            name = mats[i].get("name") or "、".join(a.get("name", "?") for a in mats[i].get("animations", []))
+            errs.append(f"草稿里多出一个没挂在主轨上的{what} {name}")
+    odd = sorted({a["type"] for i in used & set(anims) for a in anims[i]["animations"]} - {"in", "out"})
+    if odd:
+        errs.append(f"草稿里有不认识的动画类型 {odd}（只应有入场 in、出场 out）")
     vfx = {x["id"]: x for x in m.get("video_effects", [])}
+    on_track = {s.get("material_id") for t in d["tracks"] if t["type"] == "effect" for s in t["segments"]}
+    for i in set(vfx) - on_track:
+        errs.append(f"草稿里多出一个没挂在特效轨上的特效 {vfx[i].get('name')}")
     got = sorted((s["target_timerange"]["start"], s["target_timerange"]["duration"],
                   vfx.get(s.get("material_id"), {}).get("name"), vfx.get(s.get("material_id"), {}).get("resource_id"))
                  for t in d["tracks"] if t["type"] == "effect" for s in t["segments"])
