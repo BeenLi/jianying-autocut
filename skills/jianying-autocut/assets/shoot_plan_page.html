@@ -152,7 +152,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     editingLine: null,
     loaded: new Set(), status: "loading", db: null, canWrite: true, view: null, sel: null,
     open: {}, editing: null, editingCh: null, armDelete: null, failed: new Map(), dead: new Map(), drafts: {},
-    pendingVis: new Map(), pendingBase: new Map(), inflight: new Map() };
+    pendingVis: new Map(), pendingSeen: new Map(), inflight: new Map() };
 
   const app = document.getElementById("app");
   const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -210,19 +210,21 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     ? Object.fromEntries(Object.keys(v).sort().map(key => [key, v[key]])) : v);
   const curVis = id => S.pendingVis.has(id) ? S.pendingVis.get(id) : ((S.nmatch[id] || {}).visuals || []);
   function writeVis(id, visuals, extra = {}) {
-    // base：开始改之前服务器上的样子（连续几次改动沿用第一次的）。之后晚到的旧快照还是 base，不能拿它清副本
-    if (!S.pendingVis.has(id)) S.pendingBase.set(id, canon((S.nmatch[id] || {}).visuals || []));
+    // seen：这一轮改动里自己见过的版本：改动前服务器上的样子，加上每次写出去的数组。
+    // 之后晚到的快照只要是其中之一，就是自己的旧版本，不能拿它清副本
+    if (!S.pendingVis.has(id)) S.pendingSeen.set(id, new Set([canon((S.nmatch[id] || {}).visuals || [])]));
+    S.pendingSeen.get(id).add(canon(visuals));
     S.pendingVis.set(id, visuals);
     return write("nmatch/" + id, { visuals, ...extra });
   }
-  // 快照到了，清掉待定副本的情况：和副本一致（键顺序不算）；或者写入都已落地、而快照也不再是改之前的旧样子
-  // （别人在别处改过，以服务器为准）。写入落地后晚到一份旧快照时保留副本，否则刚去掉的滤镜会被下一次操作写回去
+  // 快照到了，清掉待定副本的情况：和副本一致（键顺序不算）；或者写入都已落地、而快照不是这一轮自己见过的任何版本
+  // （别人在别处改过，以服务器为准）。晚到的是改动前或中间的版本时保留副本，否则刚去掉的滤镜会被下一次操作写回去
   function settleVis() {
     for (const [id, pv] of [...S.pendingVis]) {
       const path = "nmatch/" + id, cur = canon((S.nmatch[id] || {}).visuals || []);
       const landed = !S.inflight.get(path) && !S.failed.has(path);
-      if (S.dead.has(path) || cur === canon(pv) || (landed && cur !== S.pendingBase.get(id))) {
-        S.pendingVis.delete(id); S.pendingBase.delete(id);
+      if (S.dead.has(path) || cur === canon(pv) || (landed && !S.pendingSeen.get(id).has(cur))) {
+        S.pendingVis.delete(id); S.pendingSeen.delete(id);
       }
     }
   }

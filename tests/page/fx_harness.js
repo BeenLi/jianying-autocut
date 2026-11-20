@@ -166,6 +166,18 @@ const R = {};
   change("L01", "reuse", 0, true); await tick();
   v = (lastVis("L01") || [])[0];
   R.laterServerChangeWins = !!v && v.clip_id === "c009" && v.reuse === true;
+
+  // Codex 复现：勾消音 → 去掉滤镜，两次写入都落地；晚到的是第一次写入对应的「中间快照」（带滤镜和消音）。
+  // 它既不是改动前的样子，也不等于副本，但它是自己写出去的版本，不能当成别人改的
+  fire("nmatch", base([{ clip_id: "c001", filter: FILT }]));
+  click({ act: "sel", id: "L01" });
+  change("L01", "mute", 0, true); await tick();
+  click({ act: "fx-remove", kind: "filter", id: "L01", i: "0" }); await tick();
+  fire("nmatch", base([{ clip_id: "c001", filter: FILT, mute: true }]));         // 中间快照晚到
+  calls.length = 0;
+  change("L01", "reuse", 0, true); await tick();
+  v = (lastVis("L01") || [])[0];
+  R.intermediateSnapshotNoResurrection = !!v && v.filter === null && v.mute === true && v.reuse === true;
   console.log(JSON.stringify(R));
   process.exit(Object.values(R).every(Boolean) ? 0 : 1);
 })();
