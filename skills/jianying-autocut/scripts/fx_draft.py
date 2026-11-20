@@ -31,7 +31,10 @@ def _entries(f):
 def preflight(f, shots, catalog):
     """在删旧草稿之前查：指纹、行号、时间、名字。返回错误列表（空 = 通过）。"""
     errs = []
-    if f.get("shots_sig") != fx.shots_sig(shots):
+    sig = f.get("shots_sig")
+    if not str(sig).startswith(fx.SIG_VERSION + ":"):
+        errs.append("narration_track.json 的 shots_sig 是旧格式（更新脚本之后要重跑一次）")
+    elif sig != fx.shots_sig(shots):
         errs.append("shots.csv 和 narration_track.json 不是同一次 narrate 的结果（shots_sig 对不上）")
     bad_idx = [k for k, r in enumerate(shots, 1) if str(r.get("idx")) != str(k)]
     if bad_idx:

@@ -1,3 +1,4 @@
+import shutil
 import json
 import os
 import sys
@@ -377,7 +378,9 @@ def _with_fx(work, fx_patch=None):
     """往 _narration() 写出的 track 里加 fx 段，shots_sig 按真实的 shots.csv 算。"""
     from common import read_csv
     track = json.loads((work / "narration_track.json").read_text())
-    f = {"shots_sig": fx.shots_sig(read_csv(str(work / "shots.csv"))), "transitions": [], "effects": [], "filters": []}
+    inv = {r["path"]: r["clip_id"] for r in read_csv(str(work / "inventory.csv"))}
+    rows = read_csv(str(work / "shots.csv"))
+    f = {"shots_sig": fx.shots_sig(rows, [inv[r["source"]] for r in rows]), "transitions": [], "effects": [], "filters": []}
     f.update(json.loads(json.dumps(FULL_FX if fx_patch is None else fx_patch)))
     track["fx"] = f
     (work / "narration_track.json").write_text(json.dumps(track, ensure_ascii=False))
@@ -410,7 +413,7 @@ def test_fx_attached_before_add_segment(tmp_path, monkeypatch, capsys):
     assert "✓" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("breakit", ["sig", "shot", "at", "name"])
+@pytest.mark.parametrize("breakit", ["sig", "oldsig", "shot", "at", "name"])
 def test_preflight_fails_and_keeps_old_draft(tmp_path, monkeypatch, breakit):
     drafts, work, old = _setup(tmp_path)
     _narration(tmp_path, work)
@@ -418,6 +421,8 @@ def test_preflight_fails_and_keeps_old_draft(tmp_path, monkeypatch, breakit):
     f = _with_fx(work)
     if breakit == "sig":
         f["shots_sig"] = f["shots_sig"][:-1] + ("0" if f["shots_sig"][-1] != "0" else "1")
+    elif breakit == "oldsig":                                   # 按路径算的 v1 指纹
+        f["shots_sig"] = f["shots_sig"].removeprefix("v2:")
     elif breakit == "shot":
         f["filters"][0]["shot"] = 9
     elif breakit == "at":
@@ -427,7 +432,44 @@ def test_preflight_fails_and_keeps_old_draft(tmp_path, monkeypatch, breakit):
     track = json.loads((work / "narration_track.json").read_text())
     track["fx"] = f
     (work / "narration_track.json").write_text(json.dumps(track, ensure_ascii=False))
-    with pytest.raises(SystemExit, match="重跑 narrate.py"):
+    with pytest.raises(SystemExit, match="旧格式" if breakit == "oldsig" else "重跑 narrate.py"):
+        _run(monkeypatch, "--work", str(work), "--name", "旧草稿", "--drafts-dir", str(drafts),
+             "--narration", str(work / "narration_track.json"), "--replace")
+    assert (old / "keep.txt").exists()
+
+
+def _relocate(work, old, new):
+    """派生目录的做法：把 shots.csv 和 inventory.csv 里的素材路径换成另一个位置的同名文件（clip_id 不变）。"""
+    for f in ("shots.csv", "inventory.csv"):
+        p = work / f
+        p.write_text(p.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+
+
+def test_fx_survives_relocated_sources(tmp_path, monkeypatch):
+    """在 W 跑 narrate 后复制到派生目录、换成调色副本的路径：指纹按 clip_id 算，build 照常通过。"""
+    drafts, work, old = _setup(tmp_path)
+    _narration(tmp_path, work)
+    _fake_measure(monkeypatch, {"vo.m4a": (-16.0, -3.0), "a.mp4": (-30.0, -10.0), "b.mp4": (-30.0, -10.0)})
+    _with_fx(work)
+    from common import read_csv
+    src = read_csv(str(work / "shots.csv"))[0]["source"]
+    graded = tmp_path / "调色" / os.path.basename(src)
+    graded.parent.mkdir()
+    shutil.copy(src, graded)
+    _relocate(work, src, str(graded))
+    _run(monkeypatch, "--work", str(work), "--name", "派生", "--drafts-dir", str(drafts),
+         "--narration", str(work / "narration_track.json"))
+    assert (drafts / "派生" / "draft_info.json").exists()
+
+
+def test_inventory_duplicate_path_rejected(tmp_path, monkeypatch):
+    """两段不同的素材被换成了同一个路径：拒绝，旧草稿还在。"""
+    drafts, work, old = _setup(tmp_path)
+    _narration(tmp_path, work)
+    from common import read_csv
+    inv = read_csv(str(work / "inventory.csv"))
+    _relocate(work, inv[1]["path"], inv[0]["path"])
+    with pytest.raises(SystemExit, match="inventory.csv 里有重复路径"):
         _run(monkeypatch, "--work", str(work), "--name", "旧草稿", "--drafts-dir", str(drafts),
              "--narration", str(work / "narration_track.json"), "--replace")
     assert (old / "keep.txt").exists()

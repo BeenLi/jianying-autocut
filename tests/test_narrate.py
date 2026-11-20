@@ -861,16 +861,22 @@ def test_validate_reports_fx_errors_with_real_catalog():
 
 # ---------- 镜头来源（fx 用） ----------
 
+def _iv(rows, rep):
+    """srcs 去掉 clip_id 后的样子；顺便核对 clip_id 就是这一行实际用的素材（_clips 的路径是 /x/<clip_id>.mp4）。"""
+    assert [s["clip_id"] for s in rep["srcs"]] == [os.path.basename(r["source"])[:-4] for r in rows]
+    return [{k: v for k, v in s.items() if k != "clip_id"} for s in rep["srcs"]]
+
+
 def test_srcs_record_item_and_vis():
     rows, _, rep = _lay([_line("L1", 1.0, 9.0, visuals=_vis("c1", "c2"))], _clips(("c1", 60), ("c2", 60)))
     assert [r["source"] for r in rows] == ["/x/c1.mp4", "/x/c2.mp4"]
-    assert rep["srcs"] == [{"item": "L1", "vis": 0}, {"item": "L1", "vis": 1}]
+    assert _iv(rows, rep) == [{"item": "L1", "vis": 0}, {"item": "L1", "vis": 1}]
 
 
 def test_srcs_actual_visual_when_first_is_taken():
     rows, _, rep = _lay([_line("L1", 1.0, 1.5, visuals=_vis("c1", "c2"))], _clips(("c1", 60, True), ("c2", 60)))   # 槽 3.6s，只有一块
     assert [r["source"] for r in rows] == ["/x/c2.mp4"]
-    assert rep["srcs"] == [{"item": "L1", "vis": 1}]
+    assert _iv(rows, rep) == [{"item": "L1", "vis": 1}]
 
 
 def test_srcs_borrowed_is_none():
@@ -878,22 +884,22 @@ def test_srcs_borrowed_is_none():
              _line("L2", 11.0, 13.0, visuals=_vis("c2"))]
     rows, _, rep = _lay(items, _clips(("c1", 40, True), ("c2", 40), ("c3", 40)))
     assert rows[1]["source"] == "/x/c2.mp4"
-    assert rep["srcs"][1] == {"item": "L1", "vis": None}
+    assert _iv(rows, rep)[1] == {"item": "L1", "vis": None}
     # L2 紧跟在用了 c2 的 L1 后面，不能再用 c2，也是借来的
-    assert rows[2]["source"] != "/x/c2.mp4" and rep["srcs"][2] == {"item": "L2", "vis": None}
+    assert rows[2]["source"] != "/x/c2.mp4" and _iv(rows, rep)[2] == {"item": "L2", "vis": None}
 
 
 def test_srcs_extended_keeps_source():
     items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0)]
     rows, _, rep = _lay(items, _clips(("c1", 60)))
-    assert len(rows) == 1 and rep["srcs"] == [{"item": "L1", "vis": 0}]
+    assert len(rows) == 1 and _iv(rows, rep) == [{"item": "L1", "vis": 0}]
 
 
 def test_srcs_live():
     items = [_line("L1", 1.0, 3.0, visuals=_vis("c1")), _live("V1", "c7", 30.0, 35.0),
              _line("L2", 2.0, 4.0, file="n2", visuals=_vis("c2"))]
     rows, _, rep = _lay(items, _clips(("c1", 40), ("c2", 40), ("c7", 60)))
-    assert rep["srcs"] == [{"item": "L1", "vis": 0}, {"item": "V1", "vis": None}, {"item": "L2", "vis": 0}]
+    assert _iv(rows, rep) == [{"item": "L1", "vis": 0}, {"item": "V1", "vis": None}, {"item": "L2", "vis": 0}]
 
 
 def test_report_slots_after_nudge():
@@ -930,7 +936,9 @@ def test_main_writes_fx_only_when_present(tmp_path):
     w = _work_fx(tmp_path / "b")
     assert main(["--work", w]) == 0
     track = json.loads((tmp_path / "b" / "narration_track.json").read_text())
-    assert track["fx"]["shots_sig"] == fx.shots_sig(read_csv(os.path.join(w, "shots.csv")))
+    inv = {r["path"]: r["clip_id"] for r in read_csv(os.path.join(w, "inventory.csv"))}
+    rows = read_csv(os.path.join(w, "shots.csv"))
+    assert track["fx"]["shots_sig"] == fx.shots_sig(rows, [inv[r["source"]] for r in rows])
     assert track["fx"]["transitions"][0]["item"] == "L2" and track["fx"]["intro"]["shot"] == 1
 
 

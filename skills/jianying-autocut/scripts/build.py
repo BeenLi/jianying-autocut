@@ -475,7 +475,12 @@ def main():
         if not os.path.exists(os.path.join(args.work, f)):
             sys.exit(f"{os.path.join(args.work, f)} 不存在：先跑前面几步，或检查 --work")
     shots = read_csv(os.path.join(args.work, "shots.csv"))
-    inv = {r["path"]: r for r in read_csv(os.path.join(args.work, "inventory.csv"))}
+    inv = {}
+    for r in read_csv(os.path.join(args.work, "inventory.csv")):
+        if r["path"] in inv and inv[r["path"]]["clip_id"] != r["clip_id"]:
+            sys.exit(f"inventory.csv 里有重复路径：{inv[r['path']]['clip_id']} 和 {r['clip_id']} 都指向 {r['path']}"
+                     "（派生目录替换路径时两段素材被换成了同一个文件？）")
+        inv[r["path"]] = r
     missing = [s["source"] for s in shots if s["source"] not in inv]
     if missing:
         sys.exit(f"shots.csv 引用了 inventory.csv 里没有的素材：{missing[:3]}")

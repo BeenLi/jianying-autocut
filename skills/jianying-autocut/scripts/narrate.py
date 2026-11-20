@@ -755,7 +755,7 @@ def layout(plan, clips, speech, silences, file_durs, opts):
                          "in_s": round(sh["in_us"] / US, 3), "dur_s": round(sh["dur_us"] / US, 3),
                          "start_s": round(t / US, 3), "in_us": sh["in_us"], "dur_us": sh["dur_us"],
                          "start_us": t, "score": sh["score"], "mute": "1" if sh.get("mute") else ""})
-            report["srcs"].append({"item": sh["item"], "vis": sh["vis"]})
+            report["srcs"].append({"item": sh["item"], "vis": sh["vis"], "clip_id": c.clip_id})
             t += sh["dur_us"]
     track = {"audio": [dict(a, file=plan["files"][a["fid"]]) for a in tl["audio"]],
              "subs": [], "speech": [], "live": [], "bgm": [], "total_us": tl["total_us"]}
