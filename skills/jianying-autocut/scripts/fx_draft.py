@@ -81,8 +81,12 @@ def preflight(f, shots, catalog):
         if kind == "transition":
             if n == len(shots):
                 errs.append(f"{what} 挂在最后一个镜头上，后面没有镜头可以转")
-            elif e.get("at_us") != int(r["start_us"]) + dur:
-                errs.append(f"{what} 的切点 {e.get('at_us')} 和第 {n} 个镜头的终点 {int(r['start_us']) + dur} 对不上")
+            else:
+                if e.get("at_us") != int(r["start_us"]) + dur:
+                    errs.append(f"{what} 的切点 {e.get('at_us')} 和第 {n} 个镜头的终点 {int(r['start_us']) + dur} 对不上")
+                lim = min(dur, int(shots[n]["dur_us"])) // 2          # 和 narrate 截短用的同一条规则
+                if e["dur_us"] > lim:
+                    errs.append(f"{what} 的时长 {e['dur_us']} 比两侧较短镜头的一半 {lim} 还长")
         if kind == "filter":
             v = e.get("intensity")
             if not (_num(v) and 0 <= v <= 100):
@@ -93,6 +97,11 @@ def preflight(f, shots, catalog):
             anim[kind] = (n, e["dur_us"])
         if "start_us" in e and e["start_us"] != int(r["start_us"]):
             errs.append(f"{what} 的起点 {e['start_us']} 和第 {n} 个镜头的起点 {r['start_us']} 对不上")
+    spans = sorted((e["start_us"], e["start_us"] + e["dur_us"], e.get("type")) for k, e in _entries(f)
+                   if k == "effect" and _int(e.get("start_us")) and _pos_int(e.get("dur_us")))
+    for (a0, a1, an), (b0, b1, bn) in zip(spans, spans[1:]):
+        if b0 < a1:
+            errs.append(f"特效 {an}（{a0}–{a1}）和 {bn}（{b0}–{b1}）重叠：特效轨上不能叠放")
     if len(anim) == 2 and anim["intro"][0] == anim["outro"][0]:
         n = anim["intro"][0]
         if anim["intro"][1] + anim["outro"][1] > int(shots[n - 1]["dur_us"]):

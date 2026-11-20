@@ -211,21 +211,24 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     ? Object.fromEntries(Object.keys(v).sort().map(key => [key, v[key]])) : v);
   const curVis = id => S.pendingVis.has(id) ? S.pendingVis.get(id) : ((S.nmatch[id] || {}).visuals || []);
   function writeVis(id, visuals, extra = {}) {
-    // seen：这一轮改动里自己见过的版本：改动前服务器上的样子，加上每次写出去的数组。
-    // 之后晚到的快照只要是其中之一，就是自己的旧版本，不能拿它清副本
-    if (!S.pendingVis.has(id)) S.pendingSeen.set(id, new Set([canon((S.nmatch[id] || {}).visuals || [])]));
+    // seen：自己见过的版本：每次开始改之前服务器上的样子，加上每次写出去的数组。副本清掉之后也不忘：
+    // 改了又改回原样时快照会提前等于副本，更早那次写入的快照可能还在路上。晚到的快照只要是其中之一，就是自己的旧版本
+    if (!S.pendingSeen.has(id)) S.pendingSeen.set(id, new Set());
+    if (!S.pendingVis.has(id)) S.pendingSeen.get(id).add(canon((S.nmatch[id] || {}).visuals || []));
     S.pendingSeen.get(id).add(canon(visuals));
     S.pendingVis.set(id, visuals);
     return write("nmatch/" + id, { visuals, ...extra });
   }
   // 快照到了，清掉待定副本的情况：和副本一致（键顺序不算）；或者写入都已落地、而快照不是这一轮自己见过的任何版本
-  // （别人在别处改过，以服务器为准）。晚到的是改动前或中间的版本时保留副本，否则刚去掉的滤镜会被下一次操作写回去
+  // （别人在别处改过，以服务器为准）。晚到的是自己以前的任何版本时保留副本，否则刚去掉的滤镜会被下一次操作写回去
   function settleVis() {
     for (const [id, pv] of [...S.pendingVis]) {
       const path = "nmatch/" + id, cur = canon((S.nmatch[id] || {}).visuals || []);
       const landed = !S.inflight.get(path) && !S.failed.has(path);
-      if (S.dead.has(path) || cur === canon(pv) || (landed && !S.pendingSeen.get(id).has(cur))) {
-        S.pendingVis.delete(id); S.pendingSeen.delete(id);
+      if (cur === canon(pv)) {
+        S.pendingVis.delete(id);                                // 一致：历史留着，更早那次写入的快照可能还在路上
+      } else if (S.dead.has(path) || (landed && !S.pendingSeen.get(id).has(cur))) {
+        S.pendingVis.delete(id); S.pendingSeen.delete(id);      // 以服务器为准：从它的新状态重新开始记
       }
     }
   }

@@ -953,6 +953,19 @@ def test_main_reads_catalog_once(tmp_path, monkeypatch):
     assert main(["--work", _work_fx(tmp_path / "b")]) == 0 and calls == [1]       # 有效果：只读一次
 
 
+def test_main_catalog_first_read_fails_then_ok(tmp_path, monkeypatch):        # 终审 Minor
+    import fx
+    real, n = fx.load_catalog, []
+
+    def flaky(*a, **k):
+        n.append(1)
+        if len(n) == 1:
+            raise ValueError("效果目录读不了（重跑 fx_catalog.py）")
+        return real(*a, **k)
+    monkeypatch.setattr(fx, "load_catalog", flaky)
+    assert main(["--work", _work_fx(tmp_path)]) == 0
+
+
 def test_dry_run_prints_fx_lines(tmp_path, capsys):
     w = _work_fx(tmp_path)
     assert main(["--work", w, "--dry-run"]) == 0

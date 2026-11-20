@@ -179,6 +179,19 @@ const R = {};
   v = (lastVis("L01") || [])[0];
   R.intermediateSnapshotNoResurrection = !!v && v.filter === null && v.mute === true && v.reuse === true;
 
+  // 终审 Important 3：改了又改回原样，快照恰好等于副本、历史被清空；之后去掉滤镜，晚到的中间快照不能让滤镜复活
+  fire("nmatch", base([{ clip_id: "c010", filter: FILT }]));
+  click({ act: "sel", id: "L01" });   // c010 是新素材：快照不在上一个场景的历史里，先把上一轮的待定副本清掉
+  change("L01", "mute", 0, true); await tick();
+  change("L01", "mute", 0, false); await tick();
+  fire("nmatch", base([{ clip_id: "c010", filter: FILT }]));                    // 初始旧快照 = 当前副本
+  click({ act: "fx-remove", kind: "filter", id: "L01", i: "0" }); await tick();
+  fire("nmatch", base([{ clip_id: "c010", filter: FILT, mute: true }]));         // 勾消音那次的中间快照晚到
+  calls.length = 0;
+  change("L01", "reuse", 0, true); await tick();
+  v = (lastVis("L01") || [])[0];
+  R.revertThenIntermediateNoResurrection = !!v && v.filter === null && !v.mute && v.reuse === true;
+
   // 第 2 条：原声段的画面带滤镜（导出时会丢）：不显示卡片，左侧也不算它的标记
   fire("lines", { L01: { chapter: "ch1", order: 1, kind: "narr", text: "凌晨四点出发" },
                   V01: { chapter: "ch1", order: 2, kind: "live", text: "现场原声" } });

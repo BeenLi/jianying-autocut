@@ -175,3 +175,25 @@ def test_preflight_duplicate_on_same_shot(kind):
     def p(f):
         f[kind].append(copy.deepcopy(f[kind][0]))
     assert any("重复" in e for e in _pf(p))
+
+
+# ---------- 终审（Codex）----------
+
+def test_preflight_overlapping_effects():
+    def p(f):
+        f["effects"].append(dict(f["effects"][0], start_us=1500000))       # 1.0–2.0 与 1.5–2.5 重叠
+    assert any("重叠" in e for e in _pf(p))
+
+    def q(f):
+        f["effects"].append(dict(f["effects"][0], start_us=2000000))       # 首尾相接：不算重叠
+    assert _pf(q) == []
+
+
+def test_preflight_transition_longer_than_half_shorter_side():
+    def p(f):
+        f["transitions"][0]["dur_us"] = 1500001                          # 两侧 5s / 3s：上限 1.5s
+    assert any("一半" in e for e in _pf(p))
+
+    def q(f):
+        f["transitions"][0]["dur_us"] = 1500000
+    assert _pf(q) == []

@@ -888,7 +888,8 @@ def main(argv=None):
         return 1
     report["warns"] = warns + report["warns"]
     fx_notes = {}
-    if fx.has_fx(plan):    # 校验通过说明目录读成功了
+    if fx.has_fx(plan):    # 校验通过说明目录能读；第一次没读成、校验时才读成的，这里补读
+        catalog = catalog or fx.load_catalog()
         fxd, fx_warns, fx_notes = fx.compute_fx(plan, rows, report["srcs"], report["slots"], catalog)
         report["warns"] += fx_warns
         if fxd is not None:
