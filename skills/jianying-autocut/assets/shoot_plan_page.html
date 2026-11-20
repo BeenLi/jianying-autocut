@@ -152,9 +152,10 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     editingLine: null,
     loaded: new Set(), status: "loading", db: null, canWrite: true, view: null, sel: null,
     open: {}, editing: null, editingCh: null, armDelete: null, failed: new Map(), dead: new Map(), drafts: {},
-    pendingVis: new Map(), pendingBase: new Map(), inflight: new Map() };
+    pendingVis: new Map(), pendingSeen: new Map(), inflight: new Map() };
 
   const app = document.getElementById("app");
+  const reEsc = v => String(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");   // 句子 id 拼进正则之前转义
   const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   // 秒数、"m:ss" 或 "h:mm:ss"；每一段都要是非空数字，空白不是 0（与 match.py 的 to_seconds 一致）
   const num = v => { if (v === null || v === undefined) return null; if (typeof v === "number") return isFinite(v) ? v : null;
@@ -210,19 +211,24 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     ? Object.fromEntries(Object.keys(v).sort().map(key => [key, v[key]])) : v);
   const curVis = id => S.pendingVis.has(id) ? S.pendingVis.get(id) : ((S.nmatch[id] || {}).visuals || []);
   function writeVis(id, visuals, extra = {}) {
-    // base：开始改之前服务器上的样子（连续几次改动沿用第一次的）。之后晚到的旧快照还是 base，不能拿它清副本
-    if (!S.pendingVis.has(id)) S.pendingBase.set(id, canon((S.nmatch[id] || {}).visuals || []));
+    // seen：自己见过的版本：每次开始改之前服务器上的样子，加上每次写出去的数组。副本清掉之后也不忘：
+    // 改了又改回原样时快照会提前等于副本，更早那次写入的快照可能还在路上。晚到的快照只要是其中之一，就是自己的旧版本
+    if (!S.pendingSeen.has(id)) S.pendingSeen.set(id, new Set());
+    if (!S.pendingVis.has(id)) S.pendingSeen.get(id).add(canon((S.nmatch[id] || {}).visuals || []));
+    S.pendingSeen.get(id).add(canon(visuals));
     S.pendingVis.set(id, visuals);
     return write("nmatch/" + id, { visuals, ...extra });
   }
-  // 快照到了，清掉待定副本的情况：和副本一致（键顺序不算）；或者写入都已落地、而快照也不再是改之前的旧样子
-  // （别人在别处改过，以服务器为准）。写入落地后晚到一份旧快照时保留副本，否则刚去掉的滤镜会被下一次操作写回去
+  // 快照到了，清掉待定副本的情况：和副本一致（键顺序不算）；或者写入都已落地、而快照不是这一轮自己见过的任何版本
+  // （别人在别处改过，以服务器为准）。晚到的是自己以前的任何版本时保留副本，否则刚去掉的滤镜会被下一次操作写回去
   function settleVis() {
     for (const [id, pv] of [...S.pendingVis]) {
       const path = "nmatch/" + id, cur = canon((S.nmatch[id] || {}).visuals || []);
       const landed = !S.inflight.get(path) && !S.failed.has(path);
-      if (S.dead.has(path) || cur === canon(pv) || (landed && cur !== S.pendingBase.get(id))) {
-        S.pendingVis.delete(id); S.pendingBase.delete(id);
+      if (cur === canon(pv)) {
+        S.pendingVis.delete(id);                                // 一致：历史留着，更早那次写入的快照可能还在路上
+      } else if (S.dead.has(path) || (landed && !S.pendingSeen.get(id).has(cur))) {
+        S.pendingVis.delete(id); S.pendingSeen.delete(id);      // 以服务器为准：从它的新状态重新开始记
       }
     }
   }
@@ -520,19 +526,19 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     if (S.fxEdit === key) {
       const dv = (id, v) => esc(S.drafts[id] ?? v ?? "");
       return `<div class="fx"><b>${FX_LABEL[kind]}</b>
-        <div class="two"><label>名字（剪映里的中文名）<input type="text" id="fx-type-${key}" value="${dv("fx-type-" + key, o.type)}"></label>
-        ${kind === "transition" ? `<label>时长（秒，可不填）<input type="text" id="fx-dur-${key}" value="${dv("fx-dur-" + key, o.dur)}"></label>` : ""}
-        ${kind === "filter" ? `<label>强度（0–100，可不填）<input type="text" id="fx-int-${key}" value="${dv("fx-int-" + key, o.intensity)}"></label>` : ""}</div>
+        <div class="two"><label>名字（剪映里的中文名）<input type="text" id="fx-type-${esc(key)}" value="${dv("fx-type-" + key, o.type)}"></label>
+        ${kind === "transition" ? `<label>时长（秒，可不填）<input type="text" id="fx-dur-${esc(key)}" value="${dv("fx-dur-" + key, o.dur)}"></label>` : ""}
+        ${kind === "filter" ? `<label>强度（0–100，可不填）<input type="text" id="fx-int-${esc(key)}" value="${dv("fx-int-" + key, o.intensity)}"></label>` : ""}</div>
         <div class="row"><button class="primary" data-act="fx-save" ${d} ${dis()}>保存并确认</button><button data-act="fx-cancel" ${d}>取消</button></div></div>`;
     }
     return `<div class="fx${ok ? "" : " todo"}"><div class="row" style="justify-content:space-between"><span><b>${FX_LABEL[kind]}：${esc(o.type)}</b>${detail} ${vip}</span><span class="state ${ok ? "ok" : "warn"}">${ok ? "已确认" : "待确认"}</span></div>
       ${o.reason ? `<p class="tips">理由：${esc(o.reason)}</p>` : ""}
       <div class="row">${ok ? "" : `<button class="primary" data-act="fx-confirm" ${d} ${dis()}>确认</button>`}<button data-act="fx-edit" ${d} ${dis()}>改</button><button class="danger" data-act="fx-remove" ${d} ${dis()}>去掉</button></div></div>`;
   }
-  // 这一句（含画面滤镜）的效果：非 null 的才算
-  const fxOf = (id, m) => m ? [m.transition, m.effect, ...curVis(id).map(v => v && v.filter)].filter(Boolean) : [];
+  // 这一句（含画面滤镜）的效果：非 null 的才算。原声段的滤镜导出时会丢，不显示也不算
+  const fxOf = (id, m, live) => m ? [m.transition, m.effect, ...(live ? [] : curVis(id).map(v => v && v.filter))].filter(Boolean) : [];
   function fxMark(e) {
-    const fs = fxOf(e.id, e.m);
+    const fs = fxOf(e.id, e.m, e.kind === "live");
     return fs.length ? `<span class="fxmark${fs.some(o => o.confirmed !== true) ? " fx-todo" : ""}" title="有效果">✦</span>` : "";
   }
   function fxTop() {
@@ -550,8 +556,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
       put: o => writeVis(id, curVis(id).map((v, k) => {
         if (k !== i) return v;
         return { ...v, filter: o };   // 去掉滤镜写 null：表示用户主动去掉，Claude 之后不再建议；导出时跳过
-
-      }), { by: "user" }),
+      })),                            // 只改滤镜自己的 by，画面没变，句子不标「你改过」
     };
     return { kind, ctx, obj: (S.nmatch[id] || {})[kind], put: o => write("nmatch/" + id, { [kind]: o }) };
   }
@@ -574,7 +579,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     if (!m) return head + `<p>录音里没找到这句。要么补录，要么在旁白稿里删掉它。</p>`;
     // 每个画面两个勾选：允许重复用（素材已被原声段等占用也能再用）、消音（这个镜头的垫底原声关掉）
     const flag = (v, i, f, label) => `<label><input type="checkbox" id="v${f[0]}-${id}-${i}" data-act="vflag-n" data-id="${id}" data-i="${i}" data-f="${f}" ${v[f] === true ? "checked" : ""} ${dis()}>${label}</label>`;
-    const vis = vlist.map((v, i) => `<div class="card"><b class="mono">${esc(v.clip_id)}${v.at != null ? " @ " + esc(fmt(v.at)) : ""}</b>${thumbs(v.clip_id)}${S.clips[v.clip_id] && S.clips[v.clip_id].desc ? `<p class="tips">${esc(S.clips[v.clip_id].desc)}</p>` : ""}${e.kind === "live" ? "" : `<div class="checks">${flag(v, i, "reuse", "允许重复用")}${flag(v, i, "mute", "消音")}</div>`}${v.filter ? fxCard("filter", v.filter, { id: e.id, i }) : ""}</div>`).join("");
+    const vis = vlist.map((v, i) => `<div class="card"><b class="mono">${esc(v.clip_id)}${v.at != null ? " @ " + esc(fmt(v.at)) : ""}</b>${thumbs(v.clip_id)}${S.clips[v.clip_id] && S.clips[v.clip_id].desc ? `<p class="tips">${esc(S.clips[v.clip_id].desc)}</p>` : ""}${e.kind === "live" ? "" : `<div class="checks">${flag(v, i, "reuse", "允许重复用")}${flag(v, i, "mute", "消音")}</div>`}${v.filter && e.kind !== "live" ? fxCard("filter", v.filter, { id: e.id, i }) : ""}</div>`).join("");
     return head + `
       <dl class="kv"><dt>录音</dt><dd class="mono">${esc(m.file || "")} ${esc(fmt(m.start))}–${esc(fmt(m.end))}</dd>
         ${m.skip_reason ? `<dt>跳过原因</dt><dd>${esc(m.skip_reason)}</dd>` : ""}
@@ -717,7 +722,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         patch.edited_by_user = [...new Set([...(s.edited_by_user || []), ...Object.keys(patch)])];
         write("shots/" + id, patch);
       }
-      S.editing = null; clearDrafts(new RegExp(`^f-\\w+-${id}$`)); render();
+      S.editing = null; clearDrafts(new RegExp(`^f-\\w+-${reEsc(id)}$`)); render();
     },
     "move-shot": el => { const s = S.shots[el.dataset.id]; const list = shotsOf(s.chapter); swap(list, list.findIndex(x => x.id === el.dataset.id), +el.dataset.d, "shots"); },
     "del-shot": el => {
@@ -739,7 +744,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     "save-ch": el => {
       const id = el.dataset.ch;
       write("chapters/" + id, { title: val(`cht-${id}`).trim() || S.chapters[id].title, function: val(`chf-${id}`), rhythm: val(`chr-${id}`) });
-      S.editingCh = null; clearDrafts(new RegExp(`^ch[tfr]-${id}$`)); render();
+      S.editingCh = null; clearDrafts(new RegExp(`^ch[tfr]-${reEsc(id)}$`)); render();
     },
     "move-ch": el => { const list = chapters(); swap(list, list.findIndex(c => c.id === el.dataset.ch), +el.dataset.d, "chapters"); },
     "del-ch": el => {
@@ -763,7 +768,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         const box = document.getElementById(`m-at-${id}`); if (box) { box.setCustomValidity("请选素材并填素材内的秒数"); box.reportValidity(); box.setCustomValidity(""); }
         return;
       }
-      clearDrafts(new RegExp(`^m-(clip|at)-${id}$`));
+      clearDrafts(new RegExp(`^m-(clip|at)-${reEsc(id)}$`));
       // 换了素材，Claude 原来的理由和把握就不对了：一起清掉
       const data = { clip_id: clip, at, start: null, end: null, confirmed: true, by: "user", confidence: null, reason: "" };
       write("matches/" + id, data, S.matches[id] ? "update" : "set");
@@ -790,7 +795,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         patch.edited_by_user = [...new Set([...(l.edited_by_user || []), ...Object.keys(patch).filter(k => LINE_FIELDS.includes(k))])];
         write("lines/" + id, patch);
       }
-      S.editingLine = null; clearDrafts(new RegExp(`^l[tks]-${id}(-|$)`)); render();
+      S.editingLine = null; clearDrafts(new RegExp(`^l[tks]-${reEsc(id)}(-|$)`)); render();
     },
     "move-line": el => { const l = S.lines[el.dataset.id]; const list = linesOf(l.chapter); swap(list, list.findIndex(x => x.id === el.dataset.id), +el.dataset.d, "lines"); },
     "del-line": el => {
@@ -808,7 +813,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         const b = document.getElementById(`n-at-${id}`); if (b && b.setCustomValidity) { b.setCustomValidity("请选素材；秒数要在素材长度以内"); b.reportValidity(); b.setCustomValidity(""); }
         return;
       }
-      clearDrafts(new RegExp(`^n-(clip|at)-${id}$`));
+      clearDrafts(new RegExp(`^n-(clip|at)-${reEsc(id)}$`));
       // 同一素材只改时间：保留「允许重复用」「消音」和滤镜；换了素材就清空
       const v0 = curVis(id)[0], nv = { clip_id: clip };
       if (at !== null) nv.at = at;
@@ -832,7 +837,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
     },
     "fx-confirm": el => { const t = fxTarget(el); if (t.obj) t.put({ ...t.obj, confirmed: true, by: "user" }); },
     "fx-edit": el => { const t = fxTarget(el); S.fxEdit = fxKey(t.kind, t.ctx); render(); },
-    "fx-cancel": el => { const t = fxTarget(el), key = fxKey(t.kind, t.ctx); S.fxEdit = null; clearDrafts(new RegExp(`^fx-(type|dur|int)-${key}$`)); render(); },
+    "fx-cancel": el => { const t = fxTarget(el), key = fxKey(t.kind, t.ctx); S.fxEdit = null; clearDrafts(new RegExp(`^fx-(type|dur|int)-${reEsc(key)}$`)); render(); },
     "fx-remove": el => { const t = fxTarget(el); S.fxEdit = null; t.put(null); },
     "fx-save": el => {
       const t = fxTarget(el), key = fxKey(t.kind, t.ctx), o = t.obj;
@@ -853,7 +858,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         n[f] = x;
       }
       S.fxEdit = null;
-      clearDrafts(new RegExp(`^fx-(type|dur|int)-${key}$`));
+      clearDrafts(new RegExp(`^fx-(type|dur|int)-${reEsc(key)}$`));
       t.put(n);
     },
     "retime-n": el => {
@@ -862,7 +867,7 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; }
         const x = document.getElementById(`n-end-${id}`); if (x && x.setCustomValidity) { x.setCustomValidity("结束要晚于开始"); x.reportValidity(); x.setCustomValidity(""); }
         return;
       }
-      clearDrafts(new RegExp(`^n-(start|end)-${id}$`));
+      clearDrafts(new RegExp(`^n-(start|end)-${reEsc(id)}$`));
       write("nmatch/" + id, { start: a, end: b, by: "user" });
     },
     "add-req": () => {

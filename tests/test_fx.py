@@ -140,7 +140,7 @@ def _syn(durs, items=None, vis=None):
     items = items or [f"L{k}" for k in range(len(durs))]
     for k, d in enumerate(durs):
         rows.append({"idx": k + 1, "kind": "narr", "source": f"/x/c{k}.mp4", "in_us": 0, "start_us": t, "dur_us": d})
-        srcs.append({"item": items[k], "vis": (vis or [0] * len(durs))[k]})
+        srcs.append({"item": items[k], "vis": (vis or [0] * len(durs))[k], "clip_id": f"c{k}"})
         t += d
     slots, seen = [], {}
     for r, s in zip(rows, srcs):
@@ -153,11 +153,12 @@ def _syn(durs, items=None, vis=None):
 
 
 def test_transition_at_cut_plain():
-    rows, _, f, w, notes = _fx([_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, visuals=_vis("c2"), transition=TR)],
-                               _clips(("c1", 60), ("c2", 60)))
+    rows, rep, f, w, notes = _fx([_line("L1", 1.0, 3.0, visuals=_vis("c1")), _line("L2", 6.0, 8.0, visuals=_vis("c2"), transition=TR)],
+                                 _clips(("c1", 60), ("c2", 60)))
     assert f["transitions"] == [{"shot": 1, "at_us": rows[1]["start_us"], "type": "叠化", "dur_us": 600000, "item": "L2", "vip": False}]
     assert w == [] and notes["L2"] == ["转场 叠化 0.6s"]
-    assert f["shots_sig"] == fx.shots_sig(rows)
+    assert [s["clip_id"] for s in rep["srcs"]] == ["c1", "c2"]
+    assert f["shots_sig"] == fx.shots_sig(rows, ["c1", "c2"])
 
 
 def test_transition_before_and_after_live():
@@ -212,7 +213,7 @@ def test_transition_on_fallback_shot():                                  # Revie
              _line("L1", 6.0, 8.0, visuals=_filt("c1"), transition=TR),
              _line("L2", 11.0, 13.0, visuals=_vis("c2")), _line("L3", 16.0, 18.0, visuals=_vis("c3"))]
     rows, rep, f, w, _ = _fx(items, _clips(("c1", 60, True), ("c2", 60), ("c3", 60)))
-    assert rows[1]["source"] == "/x/c3.mp4" and rep["srcs"][1] == {"item": "L1", "vis": None}
+    assert rows[1]["source"] == "/x/c3.mp4" and rep["srcs"][1] == {"item": "L1", "vis": None, "clip_id": "c3"}
     assert f["transitions"][0]["item"] == "L1" and f["transitions"][0]["shot"] == 1
     assert f["filters"] == []
     assert any("L1" in x and "滤镜" in x and "c3" in x for x in w)
@@ -291,11 +292,11 @@ def test_vip_flag_from_catalog():
     assert f["transitions"][0]["vip"] is True and f["transitions"][0]["dur_us"] == 500000
 
 
-_ROWS = [{"idx": 1, "kind": "narr", "source": "/x/a.mp4", "in_us": 0, "start_us": 0, "dur_us": 5},
-         {"idx": 2, "kind": "live", "source": "/x/b.mp4", "in_us": 7, "start_us": 5, "dur_us": 3}]
+_ROWS = [{"idx": 1, "kind": "narr", "source": "/x/a.mp4", "clip_id": "c001", "in_us": 0, "start_us": 0, "dur_us": 5},
+         {"idx": 2, "kind": "live", "source": "/x/b.mp4", "clip_id": "c002", "in_us": 7, "start_us": 5, "dur_us": 3}]
 
 
-@pytest.mark.parametrize("field,val", [("idx", 9), ("kind", "narr"), ("source", "/x/c.mp4"), ("in_us", 8),
+@pytest.mark.parametrize("field,val", [("idx", 9), ("kind", "narr"), ("clip_id", "c003"), ("in_us", 8),
                                        ("start_us", 6), ("dur_us", 4)])
 def test_shots_sig_sensitive(field, val):
     changed = [dict(_ROWS[0]), dict(_ROWS[1], **{field: val})]
@@ -304,7 +305,20 @@ def test_shots_sig_sensitive(field, val):
 
 def test_shots_sig_csv_strings_equal():
     as_csv = [{k: str(v) for k, v in r.items()} for r in _ROWS]
-    assert fx.shots_sig(as_csv) == fx.shots_sig(_ROWS) and fx.shots_sig(_ROWS).startswith("sha1:")
+    assert fx.shots_sig(as_csv) == fx.shots_sig(_ROWS) and fx.shots_sig(_ROWS).startswith("v2:sha1:")
+
+
+def test_shots_sig_ignores_source_path():
+    """派生目录把素材换成同名调色副本（clip_id 不变）：指纹不变；同名但不同 clip_id：指纹变。"""
+    moved = [dict(r, source=r["source"].replace("/x/", "/x/调色_CLog3/")) for r in _ROWS]
+    assert fx.shots_sig(moved) == fx.shots_sig(_ROWS)
+    same_name = [dict(_ROWS[0]), dict(_ROWS[1], source="/y/b.mp4", clip_id="c009")]
+    assert fx.shots_sig(same_name) != fx.shots_sig(_ROWS)
+
+
+def test_shots_sig_explicit_ids():
+    bare = [{k: v for k, v in r.items() if k != "clip_id"} for r in _ROWS]
+    assert fx.shots_sig(bare, ["c001", "c002"]) == fx.shots_sig(_ROWS)
 
 
 @pytest.mark.parametrize("content", ["[]", "{}", '{"transition": []}',

@@ -127,12 +127,18 @@ def validate_fx(plan, catalog):
 
 # ---------- 排完镜头之后：算出每个效果落在哪 ----------
 
-def shots_sig(rows):
-    """shots 的指纹：idx、kind、source、in_us、start_us、dur_us 按顺序拼起来取 sha1。
+SIG_VERSION = "v2"
+
+
+def shots_sig(rows, clip_ids=None):
+    """shots 的指纹：idx、kind、clip_id、in_us、start_us、dur_us 按顺序拼起来取 sha1，前面带版本号。
+    用 clip_id 而不是素材路径：派生目录把素材换成同名调色副本时 clip_id 不变，指纹也不变；换成另一段素材就变。
+    clip_ids 与 rows 一一对应；不给时取每行的 clip_id（build 按 inventory 补上的）。
     narrate 的整数行和 read_csv 读出来的字符串行算出来一样；build 用它确认 track 和 shots.csv 出自同一次 narrate。"""
-    text = "\n".join(f"{int(r['idx'])}|{r['kind']}|{r['source']}|{int(r['in_us'])}|{int(r['start_us'])}|{int(r['dur_us'])}"
-                     for r in rows)
-    return "sha1:" + hashlib.sha1(text.encode("utf-8")).hexdigest()
+    ids = clip_ids if clip_ids is not None else [r["clip_id"] for r in rows]
+    text = "\n".join(f"{int(r['idx'])}|{r['kind']}|{cid}|{int(r['in_us'])}|{int(r['start_us'])}|{int(r['dur_us'])}"
+                     for r, cid in zip(rows, ids, strict=True))
+    return f"{SIG_VERSION}:sha1:" + hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
 def _s(us):
@@ -215,7 +221,7 @@ def compute_fx(plan, rows, srcs, slots, catalog):
             note(srcs[r]["item"], f"{LABEL[kind]} {a['type']} {_s(d)}")
     if not any(out[k] for k in out):
         return None, warns, notes
-    return {"shots_sig": shots_sig(rows), **out}, warns, notes
+    return {"shots_sig": shots_sig(rows, [s["clip_id"] for s in srcs]), **out}, warns, notes
 
 
 def vip_list(fx):
