@@ -178,6 +178,36 @@ const R = {};
   change("L01", "reuse", 0, true); await tick();
   v = (lastVis("L01") || [])[0];
   R.intermediateSnapshotNoResurrection = !!v && v.filter === null && v.mute === true && v.reuse === true;
+
+  // 第 2 条：原声段的画面带滤镜（导出时会丢）：不显示卡片，左侧也不算它的标记
+  fire("lines", { L01: { chapter: "ch1", order: 1, kind: "narr", text: "凌晨四点出发" },
+                  V01: { chapter: "ch1", order: 2, kind: "live", text: "现场原声" } });
+  fire("nmatch", { V01: { clip_id: "c005", start: 1, end: 3, visuals: [{ clip_id: "c005", filter: { type: "夏日风吟", confirmed: false, by: "claude" } }], confirmed: true, by: "user" } });
+  click({ act: "sel", id: "V01" });
+  R.liveNoFilterCard = !H().includes("夏日风吟") && !H().includes("✦");
+
+  // 第 3 条：确认滤镜只改滤镜自己的 by，不把这句话标成「你改过」
+  fire("lines", { L01: { chapter: "ch1", order: 1, kind: "narr", text: "凌晨四点出发" } });
+  fire("nmatch", base([{ clip_id: "c001", filter: { type: "夏日风吟", intensity: 60, confirmed: false, by: "claude" } }], { by: "claude", confirmed: false }));
+  click({ act: "sel", id: "L01" });
+  calls.length = 0;
+  click({ act: "fx-confirm", kind: "filter", id: "L01", i: "0" }); await tick();
+  const fw = calls.find((c) => c.path === "nmatch/L01" && c.data.visuals);
+  R.filterConfirmKeepsLineBy = !!fw && !("by" in fw.data) && !("confirmed" in fw.data)
+    && fw.data.visuals[0].filter.by === "user" && fw.data.visuals[0].filter.confirmed === true;
+
+  // 第 7 条：句子 id 带正则 / HTML 特殊字符：改、取消不抛错，输入框 id 转义
+  const ODD = 'L[1"';
+  fire("lines", { [ODD]: { chapter: "ch1", order: 1, kind: "narr", text: "怪 id" } });
+  fire("nmatch", { [ODD]: { file: "n1", start: 1, end: 4, visuals: [{ clip_id: "c001" }], transition: TRX, confirmed: true, by: "user" } });
+  click({ act: "sel", id: ODD });
+  let threw = false;
+  try {
+    click({ act: "fx-edit", kind: "transition", id: ODD });
+    R.oddIdInputEscaped = H().includes('id="fx-type-L[1&quot;-transition"');
+    click({ act: "fx-cancel", kind: "transition", id: ODD });
+  } catch (e) { threw = true; }
+  R.oddIdNoThrow = !threw;
   console.log(JSON.stringify(R));
   process.exit(Object.values(R).every(Boolean) ? 0 : 1);
 })();
