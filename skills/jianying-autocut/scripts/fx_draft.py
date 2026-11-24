@@ -4,6 +4,8 @@
   · 片段上的转场 / 滤镜 / 动画材料只在 script.add_segment() 那一刻收进草稿，所以要先挂效果再入轨；
   · add_animation(OutroType) 用「片段长度 − 动画时长」算起点、不截短，时长已在 narrate 里截好。
 """
+import math
+
 from pyJianYingDraft import Timerange, TrackSpec, TrackType
 
 import fx
@@ -28,34 +30,82 @@ def _entries(f):
     return out + [(k, f[k]) for k in ("intro", "outro") if f.get(k)]
 
 
+def _int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _pos_int(v):
+    return _int(v) and v > 0
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 def preflight(f, shots, catalog):
-    """在删旧草稿之前查：指纹、行号、时间、名字。返回错误列表（空 = 通过）。"""
+    """在删旧草稿之前查：指纹、行号、时间、名字，以及效果自身的数值（类型、时长、强度、重复、动画重叠）。
+    返回错误列表（空 = 通过）。指纹只保护 shots，fx 段手改坏了要靠这里拦下。"""
     errs = []
-    if f.get("shots_sig") != fx.shots_sig(shots):
+    sig = f.get("shots_sig")
+    if not str(sig).startswith(fx.SIG_VERSION + ":"):
+        errs.append("narration_track.json 的 shots_sig 是旧格式（更新脚本之后要重跑一次）")
+    elif sig != fx.shots_sig(shots):
         errs.append("shots.csv 和 narration_track.json 不是同一次 narrate 的结果（shots_sig 对不上）")
     bad_idx = [k for k, r in enumerate(shots, 1) if str(r.get("idx")) != str(k)]
     if bad_idx:
         errs.append(f"shots.csv 的 idx 不是从 1 连续编号（第 {bad_idx[0]} 行的 idx 是 {shots[bad_idx[0] - 1].get('idx')}）")
     total = sum(int(r["dur_us"]) for r in shots)
+    seen, anim = set(), {}
     for kind, e in _entries(f):
         what = f"{fx.LABEL[kind]} {e.get('type')}"
         try:
             member(kind, e.get("type"), catalog)
         except KeyError as x:
             errs.append(str(x).strip("'\""))
+        if kind != "filter" and not _pos_int(e.get("dur_us")):
+            errs.append(f"{what} 的时长 {e.get('dur_us')!r} 不是正整数微秒")
+            continue
         if kind == "effect":
-            if not (0 <= e["start_us"] and e["dur_us"] > 0 and e["start_us"] + e["dur_us"] <= total):
-                errs.append(f"{what} 的时间 {e['start_us']}+{e['dur_us']} 超出成片 {total}")
+            if not (_int(e.get("start_us")) and 0 <= e["start_us"] and e["start_us"] + e["dur_us"] <= total):
+                errs.append(f"{what} 的时间 {e.get('start_us')}+{e['dur_us']} 超出成片 {total}")
             continue
         n = e.get("shot")
-        if not isinstance(n, int) or not 1 <= n <= len(shots):
+        if not _int(n) or not 1 <= n <= len(shots):
             errs.append(f"{what} 指向第 {n} 个镜头，shots.csv 只有 {len(shots)} 行")
             continue
-        r = shots[n - 1]
-        if kind == "transition" and e.get("at_us") != int(r["start_us"]) + int(r["dur_us"]):
-            errs.append(f"{what} 的切点 {e.get('at_us')} 和第 {n} 个镜头的终点 {int(r['start_us']) + int(r['dur_us'])} 对不上")
+        r, dur = shots[n - 1], int(shots[n - 1]["dur_us"])
+        if kind in ("transition", "filter"):
+            if (kind, n) in seen:
+                errs.append(f"第 {n} 个镜头上重复挂了{fx.LABEL[kind]}")
+            seen.add((kind, n))
+        if kind == "transition":
+            if n == len(shots):
+                errs.append(f"{what} 挂在最后一个镜头上，后面没有镜头可以转")
+            else:
+                if e.get("at_us") != int(r["start_us"]) + dur:
+                    errs.append(f"{what} 的切点 {e.get('at_us')} 和第 {n} 个镜头的终点 {int(r['start_us']) + dur} 对不上")
+                lim = min(dur, int(shots[n]["dur_us"])) // 2          # 和 narrate 截短用的同一条规则
+                if e["dur_us"] > lim:
+                    errs.append(f"{what} 的时长 {e['dur_us']} 比两侧较短镜头的一半 {lim} 还长")
+        if kind == "filter":
+            v = e.get("intensity")
+            if not (_num(v) and 0 <= v <= 100):
+                errs.append(f"{what} 的强度 {v!r} 不在 0–100")
+        if kind in ("intro", "outro"):
+            if e["dur_us"] > dur:
+                errs.append(f"{what} 的时长 {e['dur_us']} 比第 {n} 个镜头 {dur} 还长")
+            anim[kind] = (n, e["dur_us"])
         if "start_us" in e and e["start_us"] != int(r["start_us"]):
             errs.append(f"{what} 的起点 {e['start_us']} 和第 {n} 个镜头的起点 {r['start_us']} 对不上")
+    spans = sorted((e["start_us"], e["start_us"] + e["dur_us"], e.get("type")) for k, e in _entries(f)
+                   if k == "effect" and _int(e.get("start_us")) and _pos_int(e.get("dur_us")))
+    for (a0, a1, an), (b0, b1, bn) in zip(spans, spans[1:]):
+        if b0 < a1:
+            errs.append(f"特效 {an}（{a0}–{a1}）和 {bn}（{b0}–{b1}）重叠：特效轨上不能叠放")
+    if len(anim) == 2 and anim["intro"][0] == anim["outro"][0]:
+        n = anim["intro"][0]
+        if anim["intro"][1] + anim["outro"][1] > int(shots[n - 1]["dur_us"]):
+            errs.append(f"第 {n} 个镜头上片头和片尾动画重叠（{anim['intro'][1]} + {anim['outro'][1]} > {shots[n - 1]['dur_us']}）")
     return [x + "（重跑 narrate.py）" for x in errs]
 
 
@@ -146,10 +196,19 @@ def verify_fx(d, f, catalog):
                         errs.append(f"第 {n} 个片段：{label} {e['type']} 在 {x[2]}+{x[3]}，应在 {start}+{e['dur_us']}（片段长 {dur}）")
     # 没挂在任何主轨片段上的效果材料也算多出来的
     used = {r for seg in video for r in seg.get("extra_material_refs", [])}
-    for what, mats in (("转场", trans), ("滤镜", filts)):
-        for i in set(mats) - used:
-            errs.append(f"草稿里多出一个没挂在主轨上的{what} {mats[i]['name']}")
+    # 动画材料按所有轨道的引用算：以后字幕挂了入场动画，不算孤立
+    used_any = {r for t in d["tracks"] for seg in t["segments"] for r in seg.get("extra_material_refs", [])}
+    for what, mats, refs in (("转场", trans, used), ("滤镜", filts, used), ("动画", anims, used_any)):
+        for i in set(mats) - refs:
+            name = mats[i].get("name") or "、".join(a.get("name", "?") for a in mats[i].get("animations", []))
+            errs.append(f"草稿里多出一个没挂在主轨上的{what} {name}")
+    odd = sorted({a["type"] for i in used & set(anims) for a in anims[i]["animations"]} - {"in", "out"})
+    if odd:
+        errs.append(f"草稿里有不认识的动画类型 {odd}（只应有入场 in、出场 out）")
     vfx = {x["id"]: x for x in m.get("video_effects", [])}
+    on_track = {s.get("material_id") for t in d["tracks"] if t["type"] == "effect" for s in t["segments"]}
+    for i in set(vfx) - on_track:
+        errs.append(f"草稿里多出一个没挂在特效轨上的特效 {vfx[i].get('name')}")
     got = sorted((s["target_timerange"]["start"], s["target_timerange"]["duration"],
                   vfx.get(s.get("material_id"), {}).get("name"), vfx.get(s.get("material_id"), {}).get("resource_id"))
                  for t in d["tracks"] if t["type"] == "effect" for s in t["segments"])

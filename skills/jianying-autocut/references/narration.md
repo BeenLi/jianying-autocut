@@ -80,7 +80,8 @@
   动画截到镜头长度，截完不到 0.1s 的忽略。`--dry-run` 在每项后面打印「⤷ 转场 叠化 0.6s」，最后列出会员项。
 - `narration_plan.json` 里只放**已确认**的效果。没有页面时，你直接改编排，把 `--dry-run` 给用户看，认可就算确认。
 - build 会在删旧草稿前核对 `narration_track.json` 和 `shots.csv` 是否出自同一次 narrate（`shots_sig`），对不上就让你重跑 narrate；
-  生成后读回草稿逐个核对效果。
+  生成后读回草稿逐个核对效果。指纹按 `clip_id` 算，不看素材路径：在 W 跑完 narrate、复制到派生目录再把素材换成同名副本（例如调色副本）也能通过，
+  前提是派生目录的 inventory **沿用原来的 clip_id**，而且不同素材不能换成同一个文件（build 会拒绝重复路径）。
 - 升级 pyJianYingDraft 后重跑 `fx_catalog.py`，把新的 JSON 一起提交。
 
 ### 建议原则

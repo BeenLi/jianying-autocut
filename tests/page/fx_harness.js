@@ -166,6 +166,61 @@ const R = {};
   change("L01", "reuse", 0, true); await tick();
   v = (lastVis("L01") || [])[0];
   R.laterServerChangeWins = !!v && v.clip_id === "c009" && v.reuse === true;
+
+  // Codex 复现：勾消音 → 去掉滤镜，两次写入都落地；晚到的是第一次写入对应的「中间快照」（带滤镜和消音）。
+  // 它既不是改动前的样子，也不等于副本，但它是自己写出去的版本，不能当成别人改的
+  fire("nmatch", base([{ clip_id: "c001", filter: FILT }]));
+  click({ act: "sel", id: "L01" });
+  change("L01", "mute", 0, true); await tick();
+  click({ act: "fx-remove", kind: "filter", id: "L01", i: "0" }); await tick();
+  fire("nmatch", base([{ clip_id: "c001", filter: FILT, mute: true }]));         // 中间快照晚到
+  calls.length = 0;
+  change("L01", "reuse", 0, true); await tick();
+  v = (lastVis("L01") || [])[0];
+  R.intermediateSnapshotNoResurrection = !!v && v.filter === null && v.mute === true && v.reuse === true;
+
+  // 终审 Important 3：改了又改回原样，快照恰好等于副本、历史被清空；之后去掉滤镜，晚到的中间快照不能让滤镜复活
+  fire("nmatch", base([{ clip_id: "c010", filter: FILT }]));
+  click({ act: "sel", id: "L01" });   // c010 是新素材：快照不在上一个场景的历史里，先把上一轮的待定副本清掉
+  change("L01", "mute", 0, true); await tick();
+  change("L01", "mute", 0, false); await tick();
+  fire("nmatch", base([{ clip_id: "c010", filter: FILT }]));                    // 初始旧快照 = 当前副本
+  click({ act: "fx-remove", kind: "filter", id: "L01", i: "0" }); await tick();
+  fire("nmatch", base([{ clip_id: "c010", filter: FILT, mute: true }]));         // 勾消音那次的中间快照晚到
+  calls.length = 0;
+  change("L01", "reuse", 0, true); await tick();
+  v = (lastVis("L01") || [])[0];
+  R.revertThenIntermediateNoResurrection = !!v && v.filter === null && !v.mute && v.reuse === true;
+
+  // 第 2 条：原声段的画面带滤镜（导出时会丢）：不显示卡片，左侧也不算它的标记
+  fire("lines", { L01: { chapter: "ch1", order: 1, kind: "narr", text: "凌晨四点出发" },
+                  V01: { chapter: "ch1", order: 2, kind: "live", text: "现场原声" } });
+  fire("nmatch", { V01: { clip_id: "c005", start: 1, end: 3, visuals: [{ clip_id: "c005", filter: { type: "夏日风吟", confirmed: false, by: "claude" } }], confirmed: true, by: "user" } });
+  click({ act: "sel", id: "V01" });
+  R.liveNoFilterCard = !H().includes("夏日风吟") && !H().includes("✦");
+
+  // 第 3 条：确认滤镜只改滤镜自己的 by，不把这句话标成「你改过」
+  fire("lines", { L01: { chapter: "ch1", order: 1, kind: "narr", text: "凌晨四点出发" } });
+  fire("nmatch", base([{ clip_id: "c001", filter: { type: "夏日风吟", intensity: 60, confirmed: false, by: "claude" } }], { by: "claude", confirmed: false }));
+  click({ act: "sel", id: "L01" });
+  calls.length = 0;
+  click({ act: "fx-confirm", kind: "filter", id: "L01", i: "0" }); await tick();
+  const fw = calls.find((c) => c.path === "nmatch/L01" && c.data.visuals);
+  R.filterConfirmKeepsLineBy = !!fw && !("by" in fw.data) && !("confirmed" in fw.data)
+    && fw.data.visuals[0].filter.by === "user" && fw.data.visuals[0].filter.confirmed === true;
+
+  // 第 7 条：句子 id 带正则 / HTML 特殊字符：改、取消不抛错，输入框 id 转义
+  const ODD = 'L[1"';
+  fire("lines", { [ODD]: { chapter: "ch1", order: 1, kind: "narr", text: "怪 id" } });
+  fire("nmatch", { [ODD]: { file: "n1", start: 1, end: 4, visuals: [{ clip_id: "c001" }], transition: TRX, confirmed: true, by: "user" } });
+  click({ act: "sel", id: ODD });
+  let threw = false;
+  try {
+    click({ act: "fx-edit", kind: "transition", id: ODD });
+    R.oddIdInputEscaped = H().includes('id="fx-type-L[1&quot;-transition"');
+    click({ act: "fx-cancel", kind: "transition", id: ODD });
+  } catch (e) { threw = true; }
+  R.oddIdNoThrow = !threw;
   console.log(JSON.stringify(R));
   process.exit(Object.values(R).every(Boolean) ? 0 : 1);
 })();
